@@ -134,6 +134,10 @@ export function ModalView({
           adjustments: data.adjustments,
           asOf: submittedDate,
         });
+        if (modal.kind === "payment" && cents(f, "interest") > submittedBalance.payoffInterestCents)
+          throw new Error(
+            `ดอกที่กรอก ฿${money(cents(f, "interest"))} เกินยอดดอกที่รับได้ ณ ${date(submittedDate)} ฿${money(submittedBalance.payoffInterestCents)} หากเป็นดอกเต็มงวดของหนี้เดิม ให้ตรวจยอดดอกยกมาหรือรายการปรับปรุงก่อนบันทึก`,
+          );
         await submit("/payments", {
           loanId: modal.loan.id,
           date: submittedDate,
@@ -232,6 +236,7 @@ export function ModalView({
           <div>
             <h2 id="modal-title">{titles[modal.kind]}</h2>
             {borrower && <p>{borrower.name}</p>}
+            {loan && <small className="modal-loan-context">ต้นเริ่มบันทึก ฿{money(loan.principalCents)} · นัดชำระ {date(loan.dueDate)}</small>}
           </div>
           {modal.kind !== "recovery" && (
             <button aria-label="ปิด" disabled={busy} onClick={close}>
@@ -441,6 +446,12 @@ export function ModalView({
                   </label>
                   {modal.kind === "payment" ? (
                     <>
+                      <div className="payment-interest-context" role="status">
+                        <p>ยอดดอกที่บันทึกรับได้ถึงวันที่เลือก</p>
+                        <strong>฿{money(s?.payoffInterestCents || 0)}</strong>
+                        <small>ดอกค้าง ฿{money(s?.interestCents || 0)} + ดอกระหว่างรอบ ฿{money(s?.accruedInterestCents || 0)} · คืนต้นเป็น 0 ได้เมื่อจ่ายเฉพาะดอก</small>
+                        {loan?.source === "existing" && <small>เริ่มนับยอด {date(loan.startDate)} ดอกก่อนวันเริ่มนับต้องอยู่ในยอดยกมาหรือรายการปรับปรุง</small>}
+                      </div>
                       <div className="form-grid">
                         <Input
                           label="ยอดรับเงินจริง (บาท) *"
@@ -662,13 +673,13 @@ export function ModalView({
                   </p>
                 </>
               )}
+            </div>
+            <footer>
               {error && (
-                <p className="error" role="alert">
+                <p className="error modal-error" role="alert">
                   {error}
                 </p>
               )}
-            </div>
-            <footer>
               <Button secondary onClick={close} disabled={busy}>
                 ยกเลิก
               </Button>

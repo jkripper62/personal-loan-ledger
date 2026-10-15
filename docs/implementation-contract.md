@@ -10,6 +10,8 @@ src/domain/ledger.ts exports calculateLedger({ loan, payments, rateChanges, adju
 
 Imported first partial cycle: loan.cycleStartDate is the previous full cycle boundary, startDate is the opening/as-of date, firstCycleEndDate is the next boundary. OpeningInterestCents covers all interest BEFORE startDate. First period's charge uses remaining days startDate..firstCycleEndDate divided by full cycle days. Opening principal is the period base for this imported cycle. Future cycles use anchorDay, preserving 31 after February.
 
+Before recording a full historical installment, reconcile interest earned before the opening date against owner-confirmed information. Zero overdue interest alone does not prove zero earned interest in an unfinished cycle. If the imported value is incomplete, retain the original import and use a dated interest adjustment with the owner's reason; do not bypass the excess-interest guard or silently increase principal. Payment dialogs show interest payable for the selected date, identify the loan, and keep errors inside the sticky footer so scrolling cannot conceal them.
+
 ## HTTP interface
 
 Node server exports createApp({ dataDir, staticDir?, clock? }) -> { server, close } without listening, for real HTTP tests; index.ts starts on 127.0.0.1:4310. SQLite data directory default .data, override LOAN_DATA_DIR for isolated QA. Express not required. Session is HttpOnly SameSite=Strict, credentials same-origin. CSRF/origin protection on mutations. Only loopback may create initial owner. Session required for all data and attachment routes. Validate at server boundary.
