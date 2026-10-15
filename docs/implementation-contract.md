@@ -6,11 +6,17 @@ Shared models: src/domain/types.ts. All money is integer satang. Rate basis poin
 
 ## Calculation interface
 
-src/domain/ledger.ts exports calculateLedger({ loan, payments, rateChanges, adjustments, asOf }): LedgerSnapshot; validatePayment({ loan, payments, rateChanges, adjustments, payment }): void; addMonths(date, count, anchorDay?): string; daysBetween(start,end): number; todayBangkok(): string. Each calculation filters its own loan id. Business rejection throws Error with useful Thai message. New payment validation sees existing events strictly BEFORE this new payment, rejects negative, unsafe money, future dates, overpayments, allocation mismatch, dates before opening, and incorrect payoff totals. Allow payment of accrued interest up to payoffInterestCents. A payoff finalizes partial period once, stops accrual, cancellation resumes it. Any canceled entries are excluded. Round halfway up in integer satang.
+src/domain/ledger.ts exports calculateLedger({ loan, payments, rateChanges, adjustments, asOf }): LedgerSnapshot; validatePayment({ loan, payments, rateChanges, adjustments, payment }): void; addMonths(date, count, anchorDay?): string; daysBetween(start,end): number; todayBangkok(): string. Each calculation filters its own loan id. Business rejection throws Error with useful Thai message. New payment validation sees existing events strictly BEFORE this new payment, rejects negative or unsafe money, future dates, principal overpayments, allocation mismatch, dates before opening, and incorrect payoff totals. A payoff finalizes partial period once, stops accrual, cancellation resumes it. Any canceled entries are excluded. Round halfway up in integer satang.
 
 Imported first partial cycle: loan.cycleStartDate is the previous full cycle boundary, startDate is the opening/as-of date, firstCycleEndDate is the next boundary. OpeningInterestCents covers all interest BEFORE startDate. First period's charge uses remaining days startDate..firstCycleEndDate divided by full cycle days. Opening principal is the period base for this imported cycle. Future cycles use anchorDay, preserving 31 after February.
 
-Before recording a full historical installment, reconcile interest earned before the opening date against owner-confirmed information. Zero overdue interest alone does not prove zero earned interest in an unfinished cycle. If the imported value is incomplete, retain the original import and use a dated interest adjustment with the owner's reason; do not bypass the excess-interest guard or silently increase principal. Payment dialogs show interest payable for the selected date, identify the loan, and keep errors inside the sticky footer so scrolling cannot conceal them.
+New ordinary receipts use `Payment.interestMode: "owner"`. The owner enters actual received interest without a calculated-interest ceiling. Apply at most the calculated payable interest immediately before that receipt. Count the entire entered amount in actual received interest, and accumulate the excess in `manualInterestDifferenceCents`. Excess does not credit future interest, change principal, or change the rate. Unflagged historical receipts retain their original calculation and excess-interest validation. Automatic `isPayoff` receipts still require the exact calculated principal and interest. Interest forecasts describe gross calculated earnings, separately from actual receipts.
+
+Zero overdue interest does not prove zero earned interest in an unfinished imported cycle. If confirmed opening information is incomplete, retain the import and record a dated interest adjustment with the owner's reason. This remains available to correct calculated balances, but is no longer required to save an owner-entered ordinary receipt. Payment dialogs show the selected date's calculated interest for reference, identify the loan, explain excess treatment, and keep errors inside the sticky footer.
+
+`Payment.dateEstimated: true` marks an unknown actual receipt date. New form entries use the recording date. Editing preserves the existing reference date unless the owner changes it. The history and CSV identify the estimate. Payment edits cancel the original with a reason and append a replacement with `replacesPaymentId`. Replay validates the candidate history atomically, so a failed edit leaves both the original and later entries unchanged. Attachments remain linked to their original historical record.
+
+`Loan.statusOverride: "normal"` suppresses overdue classification without changing due dates, accrual, balances, or receipts. The override persists until the owner restores automatic status. `src/domain/status.ts` supplies the shared overdue predicate for badges, filters, and reminder lists. Closed loans remain closed. Scheduled reminders for today or tomorrow remain available.
 
 ## HTTP interface
 
@@ -26,8 +32,9 @@ Node server exports createApp({ dataDir, staticDir?, clock? }) -> { server, clos
 - POST /api/borrowers -> Borrower (omit id/createdAt)
 - PATCH /api/borrowers/:id -> Borrower
 - POST /api/loans -> Loan (omit id/createdAt)
-- PATCH /api/loans/:id { dueDate, notes?, reason } -> Loan; only due/notes, audit
+- PATCH /api/loans/:id { dueDate?, notes?, statusOverride?: 'normal'|'auto', reason } -> Loan; audit before and after, 'auto' removes the override
 - POST /api/payments -> Payment (omit generated/cancellation fields), validate real ledger
+- PATCH /api/payments/:id -> replacement Payment; same receipt fields and optional editReason, cannot move loans or edit canceled originals, retain and cancel the original
 - POST /api/payments/:id/cancel { reason } -> { ok:true }
 - POST /api/rate-changes -> RateChange (omit generated fields); effectiveDate must be a cycle start, no silent retroactive rewrite
 - POST /api/adjustments -> Adjustment (omit generated/cancellation fields), require reason and nonnegative resulting balances

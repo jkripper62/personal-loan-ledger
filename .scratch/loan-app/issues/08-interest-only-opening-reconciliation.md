@@ -3,6 +3,8 @@
 Status: resolved
 Blocked by: none
 
+Policy update: [09-owner-payments-and-normal-status.md](09-owner-payments-and-normal-status.md) supersedes the interest ceiling for new ordinary receipts. The confirmed opening adjustment remains part of the historical record. This document describes the earlier rejection and its original fix.
+
 User reported a 200-baht interest-only receipt on October 13 could not be saved. Confirmed it belongs to the 2,000-baht loan and covers the full installment ending October 13, rather than future interest. Do not save the owner's pending receipt automatically.
 
 ## Experiment ledger

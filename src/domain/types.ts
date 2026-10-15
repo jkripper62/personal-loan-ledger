@@ -7,12 +7,16 @@ export interface Loan {
   principalCents: number; openingInterestCents: number; rateBps: number;
   startDate: string; cycleStartDate: string; firstCycleEndDate: string;
   anchorDay: number; dueDate: string; notes: string; createdAt: string;
+  statusOverride?: "normal";
 }
 export interface Payment {
   id: string; loanId: string; date: string; totalCents: number;
   principalCents: number; interestCents: number; note: string; createdAt: string;
   canceledAt: string | null; cancelReason: string | null;
   isPayoff: boolean;
+  dateEstimated?: boolean;
+  interestMode?: "owner";
+  replacesPaymentId?: string;
 }
 export interface RateChange {
   id: string; loanId: string; effectiveDate: string; rateBps: number;
@@ -47,6 +51,7 @@ export interface LedgerSnapshot {
   principalCents: number; interestCents: number; accruedInterestCents: number;
   payoffInterestCents: number; totalCents: number; payoffTotalCents: number;
   principalPaidCents: number; interestPaidCents: number;
+  manualInterestDifferenceCents: number;
   currentRateBps: number; currentCycleStartDate: string; currentCycleEndDate: string;
   nextCycleInterestCents: number; periods: InterestPeriod[];
   earnedInterestCents: number;

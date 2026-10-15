@@ -110,7 +110,8 @@ export function calculateLedger({
   let base = principal,
     rate = loan.rateBps,
     principalPaid = 0,
-    interestPaid = 0;
+    interestPaid = 0,
+    manualInterestDifference = 0;
   const periods: InterestPeriod[] = [];
   let finalized = false;
   let accrualEnd = asOf;
@@ -195,7 +196,14 @@ export function calculateLedger({
       accrualEnd = p.date;
     }
     principal -= p.principalCents;
-    dueInterest -= p.interestCents;
+    let appliedInterest = p.interestCents;
+    if (p.interestMode === "owner" && !p.isPayoff) {
+      const accruedAtReceipt = finalized ? 0
+        : interest(base, rate, daysBetween(start, p.date), daysBetween(fullStart, end));
+      appliedInterest = Math.min(p.interestCents, Math.max(0, dueInterest + accruedAtReceipt));
+      manualInterestDifference += p.interestCents - appliedInterest;
+    }
+    dueInterest -= appliedInterest;
     principalPaid += p.principalCents;
     interestPaid += p.interestCents;
     if (p.date === start) base = principal;
@@ -228,6 +236,7 @@ export function calculateLedger({
     accrued,
     principalPaid,
     interestPaid,
+    manualInterestDifference,
     earnedInterest,
     cycleForecast,
     principal + arrears + payableAccrued,
@@ -244,6 +253,7 @@ export function calculateLedger({
     payoffTotalCents: principal + arrears + payableAccrued,
     principalPaidCents: principalPaid,
     interestPaidCents: interestPaid,
+    manualInterestDifferenceCents: manualInterestDifference,
     currentRateBps: rate,
     currentCycleStartDate: fullStart,
     currentCycleEndDate: end,
@@ -300,7 +310,7 @@ export function validatePayment(
   if (balance.closed) throw new Error("รายการกู้นี้ปิดหนี้แล้ว");
   if (payment.principalCents > balance.principalCents)
     throw new Error("ยอดคืนต้นเกินเงินต้นคงเหลือ");
-  if (payment.interestCents > balance.payoffInterestCents)
+  if (payment.interestMode !== "owner" && payment.interestCents > balance.payoffInterestCents)
     throw new Error("ยอดชำระดอกเกินดอกที่เกิดขึ้นถึงวันรับชำระ");
   if (
     payment.isPayoff &&

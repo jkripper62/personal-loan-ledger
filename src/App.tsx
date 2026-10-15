@@ -43,6 +43,7 @@ import {
 } from "./components/ui";
 import { calculateLedger, addMonths, todayBangkok } from "./domain/ledger";
 import { calculateInterestForecast } from "./domain/forecast";
+import { isLoanOverdue } from "./domain/status";
 import { InterestOverview, InterestDetail } from "./components/interest";
 import type {
   Borrower,
@@ -346,11 +347,11 @@ export default function App() {
         (filter === "closed"
           ? snapshots.get(l.id)?.closed
           : filter === "overdue"
-            ? l.dueDate < today && !snapshots.get(l.id)?.closed
+            ? isLoanOverdue(l, today) && !snapshots.get(l.id)?.closed
             : !snapshots.get(l.id)?.closed)),
   );
   const dueLoans = data.loans
-    .filter((l) => !snapshots.get(l.id)?.closed)
+    .filter((l) => !snapshots.get(l.id)?.closed && (l.dueDate >= today || isLoanOverdue(l, today)))
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   const selectedLoan = data.loans.find((l) => l.id === selected);
   const snapshot = selectedLoan ? snapshots.get(selectedLoan.id) : undefined;
@@ -358,6 +359,14 @@ export default function App() {
     await api(path, body, method);
     await reload();
     setNotice("บันทึกเรียบร้อยแล้ว");
+  }
+  async function setLoanStatus(loan: Loan) {
+    setBusy(true);
+    try {
+      await mutate(`/loans/${loan.id}`, { statusOverride: loan.statusOverride === "normal" ? "auto" : "normal",
+        reason: loan.statusOverride === "normal" ? "เจ้าของเลือกใช้สถานะตามวันนัด" : "เจ้าของตั้งสถานะปกติ" }, "PATCH");
+    } catch (err) { setError(err instanceof Error ? err.message : "เปลี่ยนสถานะไม่สำเร็จ"); }
+    finally { setBusy(false); }
   }
   if (!auth)
     return <div className="loading">{error || "กำลังเปิดบัญชีเงินกู้…"}</div>;
@@ -452,6 +461,8 @@ export default function App() {
           <LoanDetail
             loan={selectedLoan}
             snapshot={snapshot}
+            setStatus={setLoanStatus}
+            busy={busy}
             forecast={forecasts.get(selectedLoan.id)}
             data={data}
             back={() => setSelected(undefined)}
@@ -531,6 +542,8 @@ export default function App() {
                     <LoanTable
                       loans={loans}
                       snapshots={snapshots}
+                      setStatus={setLoanStatus}
+                      busy={busy}
                       name={borrowerName}
                       select={setSelected}
                     />
@@ -665,6 +678,8 @@ export default function App() {
                             (l) => l.borrowerId === b.id,
                           )}
                           snapshots={snapshots}
+                          setStatus={setLoanStatus}
+                          busy={busy}
                           name={borrowerName}
                           select={setSelected}
                         />
@@ -704,7 +719,7 @@ export default function App() {
                             >
                               <td>
                                 {loan ? borrowerName(loan.borrowerId) : ""}
-                                <small>{date(p.date)}</small>
+                                <small>{date(p.date)}{p.dateEstimated && " · วันที่บันทึก ไม่ทราบวันจ่ายจริง"}</small>
                               </td>
                               <td>฿{money(p.totalCents)}</td>
                               <td>฿{money(p.principalCents)}</td>
@@ -858,11 +873,15 @@ function LoanTable({
   snapshots,
   name,
   select,
+  setStatus,
+  busy,
 }: {
   loans: Loan[];
   snapshots: Map<string, LedgerSnapshot>;
   name: (id: string) => string;
   select: (id: string) => void;
+  setStatus: (loan: Loan) => void;
+  busy: boolean;
 }) {
   return (
     <div className="table-scroll">
@@ -896,14 +915,20 @@ function LoanTable({
                 <td>{date(l.dueDate)}</td>
                 <td>
                   <span
-                    className={`badge ${!s?.closed && l.dueDate < todayBangkok() ? "late" : ""}`}
+                    className={`badge ${!s?.closed && isLoanOverdue(l, todayBangkok()) ? "late" : ""}`}
                   >
                     {s?.closed
                       ? "ปิดแล้ว"
-                      : l.dueDate < todayBangkok()
+                      : isLoanOverdue(l, todayBangkok())
                         ? "เกินกำหนด"
-                        : "กำลังชำระ"}
+                        : "ปกติ"}
                   </span>
+                  {!s?.closed && (isLoanOverdue(l, todayBangkok()) || l.statusOverride === "normal") && <button
+                    className="text-button status-toggle" disabled={busy}
+                    aria-label={`${l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"} ${name(l.borrowerId)} ต้นเริ่ม ${money(l.principalCents)}`}
+                    onClick={(event) => { event.stopPropagation(); setStatus(l); }}>
+                    {l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"}
+                  </button>}
                 </td>
               </tr>
             );
@@ -920,6 +945,8 @@ function LoanDetail({
   data,
   back,
   open,
+  setStatus,
+  busy,
 }: {
   loan: Loan;
   snapshot: LedgerSnapshot;
@@ -927,6 +954,8 @@ function LoanDetail({
   data: LedgerData;
   back: () => void;
   open: (modal: Modal) => void;
+  setStatus: (loan: Loan) => void;
+  busy: boolean;
 }) {
   const borrower = data.borrowers.find((b) => b.id === loan.borrowerId);
   const loanAttachments = data.attachments.filter(
@@ -944,8 +973,8 @@ function LoanDetail({
         <section className="panel detail-main">
           <div className="panel-heading">
             <h2>รายละเอียดสัญญา</h2>
-            <span className="badge">
-              {s.closed ? "ปิดหนี้แล้ว" : "กำลังชำระ"}
+            <span className={`badge ${!s.closed && isLoanOverdue(loan, todayBangkok()) ? "late" : ""}`}>
+              {s.closed ? "ปิดหนี้แล้ว" : isLoanOverdue(loan, todayBangkok()) ? "เกินกำหนด" : "ปกติ"}
             </span>
           </div>
           <div className="detail-totals">
@@ -1000,6 +1029,10 @@ function LoanDetail({
               </dt>
               <dd>฿{money(s.interestPaidCents)}</dd>
             </div>
+            {s.manualInterestDifferenceCents > 0 && <div>
+              <dt>ดอกรับตามตกลงส่วนที่เกินยอดสูตร</dt>
+              <dd>฿{money(s.manualInterestDifferenceCents)} · ไม่เป็นเครดิตงวดถัดไป</dd>
+            </div>}
             {loan.source === "existing" && (
               <>
                 <div>
@@ -1034,6 +1067,9 @@ function LoanDetail({
                 </Button>
                 <Button secondary onClick={() => open({ kind: "due", loan })}>
                   เลื่อนวันนัด
+                </Button>
+                <Button secondary disabled={busy} onClick={() => setStatus(loan)}>
+                  {loan.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"}
                 </Button>
                 <Button secondary onClick={() => open({ kind: "rate", loan })}>
                   เปลี่ยนอัตรา
@@ -1102,6 +1138,9 @@ function LoanDetail({
                   {date(p.date)} · {p.isPayoff ? "ปิดหนี้" : "รับชำระ"} ฿
                   {money(p.totalCents)}
                 </strong>
+                {p.dateEstimated && <p>จำวันที่จ่ายจริงไม่ได้ ใช้วันที่บันทึก {date(p.date)}</p>}
+                {p.interestMode === "owner" && <small>ยอดดอกตามที่เจ้าของระบุ</small>}
+                {p.replacesPaymentId && <small> · แก้ไขจากรายการ {p.replacesPaymentId.slice(0, 8)}</small>}
                 <p>
                   คืนต้น ฿{money(p.principalCents)} · ชำระดอก ฿
                   {money(p.interestCents)} {p.note}
@@ -1109,6 +1148,8 @@ function LoanDetail({
                 {p.canceledAt ? (
                   <small>ยกเลิก: {p.cancelReason}</small>
                 ) : (
+                  <>
+                  <button className="text-button" onClick={() => open({ kind: "edit-payment", loan, payment: p })}>แก้ไข</button>
                   <button
                     className="text-button danger"
                     onClick={() =>
@@ -1117,6 +1158,7 @@ function LoanDetail({
                   >
                     ยกเลิกรายการ
                   </button>
+                  </>
                 )}
                 <button
                   className="text-button"

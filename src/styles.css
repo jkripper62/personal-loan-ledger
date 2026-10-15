@@ -71,3 +71,6 @@
 .payment-interest-context small { display: block; font-size: 12px; line-height: 1.8; }
 .modal footer { flex-wrap: wrap; }
 .modal .modal-error { flex-basis: 100%; margin: 0; padding: 12px 14px; border: 1px solid #eed6d2; border-radius: 8px; background: #fff4f2; flex-shrink: 0; font-size: 13px; line-height: 1.7; max-height: 22vh; overflow-y: auto; }
+.payment-date-unknown { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; line-height: 1.8; color: #426354; }
+.payment-date-unknown input { width: 18px; height: 18px; flex-shrink: 0; margin: 2px 0 0; accent-color: #07513f; }
+.status-toggle { display: block; margin-top: 7px; font-size: 12px; white-space: nowrap; }

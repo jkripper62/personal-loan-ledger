@@ -29,6 +29,7 @@ import {
   daysBetween,
 } from "../src/domain/ledger.js";
 import { compareEvents } from "../src/domain/chronology.js";
+import { isLoanOverdue } from "../src/domain/status.js";
 import { createLedgerCsv } from "./export.js";
 
 const hashPassword = (
@@ -227,6 +228,27 @@ export function createApp({
       month: "2-digit",
       day: "2-digit",
     }).format(clock());
+  function readPayment(body: Record<string, unknown>, fixedLoanId?: string): Payment {
+    if (typeof body.isPayoff !== "boolean")
+      return fail(400, "ต้องระบุว่าปิดหนี้หรือรับชำระทั่วไป");
+    if (body.dateEstimated !== undefined && typeof body.dateEstimated !== "boolean")
+      return fail(400, "ต้องระบุสถานะวันที่รับชำระให้ถูกต้อง");
+    if (fixedLoanId && body.loanId !== undefined && text(body.loanId, "รายการกู้", true) !== fixedLoanId)
+      return fail(400, "การแก้ไขต้องเป็นรายการกู้เดิม");
+    const payment: Payment = {
+      id: randomUUID(), loanId: fixedLoanId ?? text(body.loanId, "รายการกู้", true),
+      date: body.dateEstimated === true && body.date === undefined ? today() : date(body.date, "วันรับชำระ"),
+      dateEstimated: body.dateEstimated === true,
+      totalCents: integer(body.totalCents, "ยอดรับจริง"),
+      principalCents: integer(body.principalCents, "คืนต้น"),
+      interestCents: integer(body.interestCents, "ดอก"), note: text(body.note, "หมายเหตุ"),
+      isPayoff: body.isPayoff,
+      interestMode: body.isPayoff ? undefined : "owner",
+      createdAt: now(), canceledAt: null, cancelReason: null,
+    };
+    if (payment.date > today()) return fail(400, "ไม่สามารถรับชำระล่วงหน้าได้");
+    return payment;
+  }
   const getLoan = (data: LedgerData, id: unknown) =>
     required(
       data.loans.find((l) => l.id === text(id, "รายการกู้", true)),
@@ -776,14 +798,20 @@ export function createApp({
           const reason = text(body.reason, "เหตุผล", true);
           if (
             Object.keys(body).some(
-              (key) => !["dueDate", "notes", "reason"].includes(key),
+              (key) => !["dueDate", "notes", "reason", "statusOverride"].includes(key),
             )
           )
-            return fail(400, "เปลี่ยนได้เฉพาะวันนัดชำระและหมายเหตุ");
-          const dueDate = date(body.dueDate, "วันนัดชำระ");
+            return fail(400, "เปลี่ยนได้เฉพาะวันนัดชำระ หมายเหตุ และสถานะ");
+          const dueDate = body.dueDate === undefined ? loan.dueDate : date(body.dueDate, "วันนัดชำระ");
           if (dueDate < loan.startDate)
             return fail(400, "วันนัดชำระต้องไม่ก่อนวันเริ่มนับยอด");
-          const before = { dueDate: loan.dueDate, notes: loan.notes };
+          const before = { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride };
+          if (body.statusOverride !== undefined) {
+            if (body.statusOverride !== "normal" && body.statusOverride !== "auto")
+              return fail(400, "สถานะต้องเป็นปกติหรือตามวันนัด");
+            if (body.statusOverride === "normal") loan.statusOverride = "normal";
+            else delete loan.statusOverride;
+          }
           loan.dueDate = dueDate;
           if (body.notes !== undefined)
             loan.notes = text(body.notes, "หมายเหตุ");
@@ -794,7 +822,7 @@ export function createApp({
             JSON.stringify({
               reason,
               before,
-              after: { dueDate: loan.dueDate, notes: loan.notes },
+              after: { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride },
             }),
           );
           return loan;
@@ -802,23 +830,7 @@ export function createApp({
         return json(response, 200, loan);
       }
       if (path === "/api/payments" && method === "POST") {
-        if (typeof body.isPayoff !== "boolean")
-          return fail(400, "ต้องระบุว่าปิดหนี้หรือรับชำระทั่วไป");
-        const payment: Payment = {
-          id: randomUUID(),
-          loanId: text(body.loanId, "รายการกู้", true),
-          date: date(body.date, "วันรับชำระ"),
-          totalCents: integer(body.totalCents, "ยอดรับจริง"),
-          principalCents: integer(body.principalCents, "คืนต้น"),
-          interestCents: integer(body.interestCents, "ดอก"),
-          note: text(body.note, "หมายเหตุ"),
-          isPayoff: body.isPayoff,
-          createdAt: now(),
-          canceledAt: null,
-          cancelReason: null,
-        };
-        if (payment.date > today())
-          return fail(400, "ไม่สามารถรับชำระล่วงหน้าได้");
+        const payment = readPayment(body);
         mutate((data) => {
           const loan = getLoan(data, payment.loanId);
           data.payments.push(payment);
@@ -826,6 +838,22 @@ export function createApp({
           audit(data, "payment.create", payment.id, payment.note || "รับชำระ");
         });
         return json(response, 201, payment);
+      }
+      const editPayment = path.match(/^\/api\/payments\/([^/]+)$/);
+      if (editPayment && method === "PATCH") {
+        const replacement = mutate((data) => {
+          const original = required(data.payments.find(p => p.id === editPayment[1]), "รายการรับชำระ");
+          if (original.canceledAt) return fail(409, "รายการนี้ถูกยกเลิกหรือแก้ไขแล้ว ให้เปิดรายการล่าสุด");
+          const reason = text(body.editReason, "เหตุผลที่แก้ไข") || "เจ้าของแก้ไขรายการรับชำระ";
+          const updated = { ...readPayment(body, original.loanId), replacesPaymentId: original.id };
+          original.canceledAt = now();
+          original.cancelReason = `แก้ไขรายการ: ${reason}`;
+          data.payments.push(updated);
+          replay(data, getLoan(data, original.loanId));
+          audit(data, "payment.edit", updated.id, JSON.stringify({ previousPaymentId: original.id, reason }));
+          return updated;
+        });
+        return json(response, 200, replacement);
       }
       const cancelPayment = path.match(/^\/api\/payments\/([^/]+)\/cancel$/);
       if (cancelPayment && method === "POST") {
@@ -974,7 +1002,8 @@ export function createApp({
           .filter(
             (loan) =>
               !ledger(data, loan).closed &&
-              daysBetween(currentDate, loan.dueDate) <= 1,
+              daysBetween(currentDate, loan.dueDate) <= 1 &&
+              (loan.dueDate >= currentDate || isLoanOverdue(loan, currentDate)),
           )
           .map((loan) => ({
             loanId: loan.id,
@@ -984,7 +1013,7 @@ export function createApp({
             kind:
               loan.dueDate === currentDate
                 ? "today"
-                : loan.dueDate < currentDate
+                : isLoanOverdue(loan, currentDate)
                   ? "overdue"
                   : "tomorrow",
           }));

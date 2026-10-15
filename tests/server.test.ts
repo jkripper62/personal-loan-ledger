@@ -135,7 +135,76 @@ const loanInput = (borrowerId: string) => ({
   dueDate: "2026-10-01",
   notes: "ข้อมูลหนี้เดิม",
 });
-it("reconciles a full historical interest installment without reducing principal or allowing unearned overpayments", async () => {
+it("edits a manual receipt atomically while retaining the original and unknown-date metadata", async () => {
+  const api = await client(undefined, undefined, () => new Date("2026-10-15T06:00:00Z"));
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "เจ้าของแก้ยอดเอง" });
+  const loan = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id),
+    principalCents: 200000, startDate: "2026-10-10", cycleStartDate: "2026-09-13",
+    firstCycleEndDate: "2026-10-13", anchorDay: 13, dueDate: "2026-10-13" });
+  const body = { loanId: loan.body.id, totalCents: 50000, principalCents: 0, interestCents: 50000,
+    isPayoff: false, dateEstimated: true, note: "จำวันที่จ่ายไม่ได้" };
+  const receipt = await api.request("/api/payments", "POST", body);
+  expect(receipt.response.status).toBe(201);
+  expect(receipt.body).toMatchObject({ date: "2026-10-15", dateEstimated: true, interestMode: "owner", interestCents: 50000 });
+  const invalid = await api.request(`/api/payments/${receipt.body.id}`, "PATCH", { ...body, date: "2026-10-15", totalCents: 1 });
+  expect(invalid.response.status).toBe(400);
+  expect((await api.request("/api/data")).body.payments).toMatchObject([{ id: receipt.body.id, canceledAt: null }]);
+  const edited = await api.request(`/api/payments/${receipt.body.id}`, "PATCH", {
+    ...body, date: "2026-10-13", dateEstimated: false, totalCents: 20000, interestCents: 20000, editReason: "นึกวันและยอดจริงได้แล้ว" });
+  expect(edited.response.status).toBe(200);
+  expect(edited.body).toMatchObject({ replacesPaymentId: receipt.body.id, date: "2026-10-13", dateEstimated: false, interestCents: 20000 });
+  const data = await api.request("/api/data");
+  expect(data.body.payments).toMatchObject([
+    { id: receipt.body.id, interestCents: 50000, cancelReason: "แก้ไขรายการ: นึกวันและยอดจริงได้แล้ว" },
+    { id: edited.body.id, interestCents: 20000, canceledAt: null },
+  ]);
+  expect((await api.request(`/api/payments/${receipt.body.id}`, "PATCH", { ...body, date: "2026-10-15" })).response.status).toBe(409);
+  const csv = await api.request("/api/export");
+  expect(csv.text).toContain("จำวันที่จ่ายจริงไม่ได้");
+  expect(csv.text).toContain("แก้ไขจากรายการ");
+  expect(csv.text).toContain("ยอดดอกตามที่เจ้าของระบุ");
+});
+
+it("rolls back a principal edit that would invalidate a later final payment", async () => {
+  const api = await client();
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "ทดสอบแก้ย้อนหลัง" });
+  const loan = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), principalCents: 100000, rateBps: 0 });
+  const body = { loanId: loan.body.id, date: "2026-09-20", totalCents: 40000, principalCents: 40000, interestCents: 0, isPayoff: false };
+  const first = await api.request("/api/payments", "POST", body);
+  const final = await api.request("/api/payments", "POST", { ...body, date: "2026-09-25", totalCents: 60000, principalCents: 60000, isPayoff: true });
+  expect(final.response.status).toBe(201);
+  expect((await api.request(`/api/payments/${first.body.id}`, "PATCH", { ...body, totalCents: 50000, principalCents: 50000 })).response.status).toBe(400);
+  expect((await api.request("/api/data")).body.payments).toMatchObject([
+    { id: first.body.id, canceledAt: null, principalCents: 40000 }, { id: final.body.id, canceledAt: null, principalCents: 60000 },
+  ]);
+});
+
+it("lets the owner normalize an overdue status without moving the due date or balances", async () => {
+  const api = await client(undefined, undefined, () => new Date("2026-10-15T06:00:00Z"));
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "ทดสอบสถานะปกติ" });
+  const loan = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), dueDate: "2026-10-13" });
+  expect((await api.request("/api/reminders")).text).toContain("overdue");
+  const normal = await api.request(`/api/loans/${loan.body.id}`, "PATCH", { statusOverride: "normal", reason: "เจ้าของตั้งปกติ" });
+  expect(normal.response.status).toBe(200);
+  expect(normal.body).toMatchObject({ statusOverride: "normal", dueDate: "2026-10-13", principalCents: 1000000 });
+  expect((await api.request("/api/reminders")).body.items).toEqual([]);
+  expect((await api.request(`/api/loans/${loan.body.id}`, "PATCH", { statusOverride: "paid", reason: "ทดสอบ" })).response.status).toBe(400);
+  const automatic = await api.request(`/api/loans/${loan.body.id}`, "PATCH", { statusOverride: "auto", reason: "กลับไปตามวันนัด" });
+  expect(automatic.response.status).toBe(200);
+  expect((await api.request("/api/reminders")).text).toContain("overdue");
+  for (const [dueDate, kind] of [["2026-10-15", "today"], ["2026-10-16", "tomorrow"]]) {
+    await api.request(`/api/loans/${loan.body.id}`, "PATCH", { statusOverride: "normal", dueDate, reason: "นัดรอบใหม่" });
+    expect((await api.request("/api/reminders")).body.items).toEqual([
+      { loanId: loan.body.id, borrowerName: "ทดสอบสถานะปกติ", dueDate, kind },
+    ]);
+  }
+  await api.request(`/api/loans/${loan.body.id}`, "PATCH", { dueDate: "2026-10-18", reason: "นัดรอบใหม่" });
+  expect((await api.request("/api/reminders")).body.items).toEqual([]);
+});
+it("accepts owner interest regardless of formula while retaining optional historical reconciliation", async () => {
   const api = await client(undefined, undefined, () => new Date("2026-10-15T06:00:00Z"));
   await api.request("/api/auth/setup", "POST", credentials);
   const borrower = await api.request("/api/borrowers", "POST", { name: "ผู้กู้ทดสอบเต็มงวด" });
@@ -147,7 +216,10 @@ it("reconciles a full historical interest installment without reducing principal
   expect(loan.response.status).toBe(201);
   const installment = { loanId: loan.body.id, date: "2026-10-13", totalCents: 20000,
     principalCents: 0, interestCents: 20000, isPayoff: false, note: "ดอกเต็มงวด" };
-  expect((await api.request("/api/payments", "POST", installment)).response.status).toBe(400);
+  const initial = await api.request("/api/payments", "POST", installment);
+  expect(initial.response.status).toBe(201);
+  expect(initial.body.interestMode).toBe("owner");
+  await api.request(`/api/payments/${initial.body.id}/cancel`, "POST", { reason: "ทดสอบยอดยกมา" });
   const adjustment = await api.request("/api/adjustments", "POST", {
     loanId: loan.body.id, date: "2026-10-10", principalDeltaCents: 0, interestDeltaCents: 18000,
     reason: "ยืนยันดอกเต็มงวด 200 บาท มีดอกก่อนเริ่มบันทึก 180 บาท",
@@ -158,10 +230,10 @@ it("reconciles a full historical interest installment without reducing principal
   expect(receipt.body).toMatchObject({ principalCents: 0, interestCents: 20000 });
   const csv = await api.request("/api/export");
   expect(csv.text).toContain("2000.00");
-  const repeated = await api.request("/api/payments", "POST", { ...installment, note: "เกินยอดที่ยังต้องชำระ" });
+  const repeated = await api.request("/api/payments", "POST", { ...installment, interestCents: 20001 });
   expect(repeated.response.status).toBe(400);
   const reversed = await api.request(`/api/adjustments/${adjustment.body.id}/cancel`, "POST", { reason: "ทดสอบประวัติย้อนหลัง" });
-  expect(reversed.response.status).toBe(400);
+  expect(reversed.response.status).toBe(200);
 });
 it("exports individually dated payments including canceled allocations alongside balance summaries", async () => {
   const api = await client();

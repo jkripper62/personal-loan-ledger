@@ -79,7 +79,9 @@ export function createLedgerCsv(data: LedgerData, asOf: string): string {
       payment.canceledAt ? "ยกเลิก" : payment.isPayoff ? "ปิดหนี้" : "มีผล",
       payment.canceledAt ?? "",
       payment.cancelReason ?? "",
-      payment.note,
+      [payment.dateEstimated ? "จำวันที่จ่ายจริงไม่ได้ ใช้วันที่บันทึก" : "",
+        payment.interestMode === "owner" ? "ยอดดอกตามที่เจ้าของระบุ" : "",
+        payment.replacesPaymentId ? `แก้ไขจากรายการ ${payment.replacesPaymentId}` : "", payment.note].filter(Boolean).join(" · "),
       loan?.source === "existing" ? "ยอดรับคืนก่อนหน้านั้นยังไม่ทราบ" : "",
     ]);
   }
