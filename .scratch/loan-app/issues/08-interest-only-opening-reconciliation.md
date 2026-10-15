@@ -29,7 +29,7 @@ A full historical interest installment could not be recorded because the importe
 
 ### Fix
 
-Branch `integration/loan-app`: `src/components/modal.tsx` displays the selected loan, payment-date interest allowance, and a numeric excess-interest explanation. Errors now belong to a full-width row inside the sticky footer; `src/styles.css` wraps footer content so the message stays above its buttons.
+Commit `2432efc` on `main`: `src/components/modal.tsx` displays the selected loan, payment-date interest allowance, and a numeric excess-interest explanation. Errors now belong to a full-width row inside the sticky footer; `src/styles.css` wraps footer content so the message stays above its buttons.
 
 The owner-confirmed live-data correction adds one interest-only adjustment at the opening date, with audit reason and a pre-change ledger backup. A private guarded transaction validates the pending receipt and unchanged principal before committing. A deterministic adjustment ID prevents reapplication. No live receipt was created by the agent, and no other loan was changed. No blanket overpayment exception was introduced.
 
