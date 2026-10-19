@@ -839,6 +839,37 @@ export function createApp({
         });
         return json(response, 201, payment);
       }
+      const correctLoan = path.match(/^\/api\/loans\/([^/]+)\/correction$/);
+      if (correctLoan && method === "POST") {
+        const corrected = mutate((data) => {
+          const loan = getLoan(data, correctLoan[1]);
+          if (Object.keys(body).some(key => !["rateBps", "dueDate", "reason", "cancelRateChangeIds"].includes(key)))
+            return fail(400, "แก้ได้เฉพาะอัตราเดิมและวันนัดชำระ");
+          const reason = text(body.reason, "เหตุผลที่แก้ไข", true);
+          const rateBps = integer(body.rateBps, "อัตราดอกที่ถูกต้อง");
+          const dueDate = date(body.dueDate, "วันนัดชำระ");
+          if (dueDate < loan.startDate) return fail(400, "วันนัดชำระต้องไม่ก่อนวันเริ่มนับยอด");
+          const requested = body.cancelRateChangeIds ?? [];
+          if (!Array.isArray(requested) || requested.some(id => typeof id !== "string"))
+            return fail(400, "รายการอัตราที่จะยกเลิกไม่ถูกต้อง");
+          const before = { rateBps: loan.rateBps, dueDate: loan.dueDate };
+          for (const id of new Set(requested)) {
+            const change = required(data.rateChanges.find(r => r.id === id && r.loanId === loan.id), "รายการอัตรา");
+            if (change.effectiveDate <= today()) return fail(400, "ยกเลิกได้เฉพาะอัตราที่ตั้งล่วงหน้า");
+            if (!change.canceledAt) {
+              change.canceledAt = now();
+              change.cancelReason = reason;
+            }
+          }
+          loan.rateBps = rateBps;
+          loan.dueDate = dueDate;
+          replay(data, loan);
+          audit(data, "loan.correct", loan.id, JSON.stringify({ reason, before,
+            after: { rateBps: loan.rateBps, dueDate: loan.dueDate }, cancelRateChangeIds: requested }));
+          return loan;
+        });
+        return json(response, 200, corrected);
+      }
       const editPayment = path.match(/^\/api\/payments\/([^/]+)$/);
       if (editPayment && method === "PATCH") {
         const replacement = mutate((data) => {
@@ -897,6 +928,7 @@ export function createApp({
             data.rateChanges.some(
               (r) =>
                 r.loanId === loan.id &&
+                !r.canceledAt &&
                 r.effectiveDate === change.effectiveDate,
             )
           )

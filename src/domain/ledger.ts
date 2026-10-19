@@ -119,7 +119,7 @@ export function calculateLedger({
     (p) => p.loanId === loan.id && !p.canceledAt && p.date <= asOf,
   );
   const selectedRates = rateChanges
-    .filter((c) => c.loanId === loan.id)
+    .filter((c) => c.loanId === loan.id && !c.canceledAt)
     .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate));
   for (const change of selectedRates)
     if (change.effectiveDate <= fullStart) rate = change.rateBps;

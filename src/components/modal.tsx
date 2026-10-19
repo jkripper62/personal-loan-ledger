@@ -14,7 +14,7 @@ export type Modal =
   | { kind: "loan"; borrowerId?: string }
   | { kind: "edit-payment"; loan: Loan; payment: Payment }
   | {
-      kind: "payment" | "payoff" | "rate" | "adjustment" | "due" | "contact";
+      kind: "payment" | "payoff" | "rate" | "adjustment" | "loan-correction" | "contact";
       loan: Loan;
     }
   | { kind: "attachment"; loan: Loan }
@@ -67,6 +67,13 @@ export function ModalView({
             : loan.startDate,
       })
     : undefined;
+  const [ratePercent, setRatePercent] = useState(() =>
+    loan ? String((modal.kind === "loan-correction" ? loan.rateBps : s?.currentRateBps ?? loan.rateBps) / 100) : "",
+  );
+  const futureRates = loan ? data.rateChanges.filter(r => r.loanId === loan.id && !r.canceledAt && r.effectiveDate > todayBangkok()) : [];
+  const availableRateDates = loan && s && modal.kind === "rate"
+    ? Array.from({ length: 24 }, (_, index) => addMonths(s.currentCycleEndDate, index, loan.anchorDay))
+      .filter(day => !futureRates.some(r => r.effectiveDate === day)) : [];
   const [message, setMessage] = useState(
     loan
       ? `สวัสดี ${borrower?.nickname || borrower?.name} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} ดอกค้าง ${money(snapshots.get(loan.id)?.interestCents || 0)} บาท เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
@@ -81,9 +88,9 @@ export function ModalView({
     payment: "บันทึกรับชำระ",
     "edit-payment": "แก้ไขรับชำระ",
     payoff: "ปิดหนี้ตามวัน",
-    rate: "เปลี่ยนอัตราดอกเบี้ย",
+    rate: "เปลี่ยนอัตรางวดถัดไป",
     adjustment: "ปรับปรุงยอด",
-    due: "เลื่อนวันนัดชำระ",
+    "loan-correction": "แก้ดอก / วันนัด",
     contact: "เตรียมข้อความติดตาม",
     attachment: "แนบหลักฐาน",
     "payment-attachment": "แนบสลิปการชำระ",
@@ -174,15 +181,16 @@ export function ModalView({
           interestDeltaCents: cents(f, "interestDelta"),
           reason: field(f, "reason"),
         });
-      else if (modal.kind === "due")
+      else if (modal.kind === "loan-correction")
         await submit(
-          `/loans/${modal.loan.id}`,
+          `/loans/${modal.loan.id}/correction`,
           {
+            rateBps: Math.round(Number(field(f, "rate")) * 100),
             dueDate: field(f, "dueDate"),
-            notes: field(f, "notes"),
             reason: field(f, "reason"),
+            cancelRateChangeIds: f.getAll("cancelRateChangeIds").map(String),
           },
-          "PATCH",
+          "POST",
         );
       else if (modal.kind === "cancel")
         await submit(modal.path, { reason: field(f, "reason") });
@@ -521,26 +529,21 @@ export function ModalView({
               {modal.kind === "rate" && (
                 <>
                   <div className="form-grid">
-                    <Input
-                      label="อัตราใหม่ต่อเดือน (%) *"
-                      name="rate"
-                      type="number"
-                      min="0"
-                      max={modal.loan.source === "new" ? "1.25" : undefined}
-                      step="0.01"
-                      required
-                    />
-                    <Input
-                      label="วันเริ่มงวดที่ใช้ *"
-                      name="effectiveDate"
-                      type="date"
-                      value={s?.currentCycleEndDate}
-                      required
-                    />
+                    <label className="field">อัตราใหม่ต่อเดือน (%) *
+                      <input name="rate" type="number" min="0" max={modal.loan.source === "new" ? "1.25" : undefined}
+                        step="0.01" required value={ratePercent} onChange={e => setRatePercent(e.target.value)} />
+                      <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
+                      {modal.loan.source === "new" && <small>รายการประเภทกู้ใหม่ ตั้งอัตราสำหรับงวดใหม่ได้ไม่เกิน 1.25% ต่อเดือน</small>}
+                    </label>
+                    <label className="field">เริ่มใช้อัตราใหม่ในงวด *
+                      <select name="effectiveDate" required defaultValue={availableRateDates[0]}>
+                        {availableRateDates.map(day => <option key={day} value={day}>{date(day)}</option>)}
+                      </select>
+                      <small>แสดงเฉพาะวันเริ่มรอบที่ยังไม่ได้ตั้งอัตราไว้</small>
+                    </label>
                   </div>
                   <p className="panel-note">
-                    มีผลที่วันเริ่มรอบถัดไป เก็บอัตราเดิมในประวัติ
-                    การแก้ย้อนหลังใช้ปรับปรุงยอด
+                    ใช้สำหรับตกลงอัตราใหม่ในอนาคต หากกรอกอัตราเดิมผิด ให้ปิดหน้านี้แล้วเลือก “แก้ดอก / วันนัด”
                   </p>
                   <Input label="เหตุผล *" name="reason" required />
                 </>
@@ -578,22 +581,35 @@ export function ModalView({
                   <Input label="เหตุผล *" name="reason" required />
                 </>
               )}
-              {modal.kind === "due" && (
+              {modal.kind === "loan-correction" && (
                 <>
+                  <p className="panel-note">แก้ข้อมูลที่กรอกผิด โดยใช้อัตราที่ถูกต้องตั้งแต่วันเริ่มบันทึก เก็บค่าเดิมและเหตุผลไว้ในประวัติ</p>
+                  <label className="field">อัตราดอกที่ถูกต้องต่อเดือน (%) *
+                    <input name="rate" type="number" min="0" step="0.01" required value={ratePercent} onChange={e => setRatePercent(e.target.value)} />
+                    <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
+                  </label>
+                  <div className="payment-interest-context" role="status">
+                    <p>ดอกเต็มเดือนจากต้นเริ่มบันทึก ฿{money(modal.loan.principalCents)}</p>
+                    <strong>{Number.isFinite(Number(ratePercent)) && Number(ratePercent) >= 0
+                      ? `${Number(ratePercent)}% = ฿${money(Math.round(modal.loan.principalCents * Number(ratePercent) / 100))}` : "กรอกอัตราที่ถูกต้อง"}</strong>
+                  </div>
                   <Input
                     label="วันนัดชำระใหม่ *"
                     name="dueDate"
                     type="date"
                     value={modal.loan.dueDate}
+                    min={modal.loan.startDate}
                     required
                   />
-                  <Input
-                    label="หมายเหตุ"
-                    name="notes"
-                    value={modal.loan.notes}
-                  />
+                  {futureRates.length > 0 && <div className="panel-note">
+                    <p>มีอัตราที่ตั้งไว้ล่วงหน้า หากตั้งผิด ให้เลือกยกเลิกรายการนั้นด้วย</p>
+                    {futureRates.map(r => <label className="payment-date-unknown" key={r.id}>
+                      <input type="checkbox" name="cancelRateChangeIds" value={r.id} />
+                      ยกเลิกอัตรา {r.rateBps / 100}% วันที่ {date(r.effectiveDate)}
+                    </label>)}
+                  </div>}
                   <Input label="เหตุผล *" name="reason" required />
-                  <p className="panel-note">การเลื่อนนัดไม่เปลี่ยนรอบคิดดอก</p>
+                  <p className="panel-note">เปลี่ยนวันนัดชำระได้ แต่รอบตัดดอกยังเดิม รายการที่ตั้งอัตราล่วงหน้าไว้จะยังใช้ตามเดิมหากไม่ได้เลือกยกเลิก</p>
                 </>
               )}
               {modal.kind === "cancel" && (

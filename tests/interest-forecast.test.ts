@@ -17,6 +17,17 @@ const payment = (values: Partial<Payment>): Payment => ({
 const forecast = (asOf = "2026-09-11", selectedLoan = loan, payments: Payment[] = []) =>
   calculateInterestForecast({ loan: selectedLoan, payments, rateChanges: [], adjustments: [], asOf });
 
+it("ignores canceled scheduled rates in daily balances and month-end forecasts", () => {
+  const input = { loan, payments: [], adjustments: [], asOf: "2026-10-11" };
+  const scheduled = { id: "wrong-rate", loanId: loan.id, effectiveDate: "2026-10-01", rateBps: 10,
+    reason: "พิมพ์ผิด", createdAt: "2026-09-20T00:00:00Z" };
+  const active = calculateInterestForecast({ ...input, rateChanges: [scheduled] });
+  const canceled = calculateInterestForecast({ ...input, rateChanges: [{ ...scheduled, canceledAt: "2026-09-21T00:00:00Z", cancelReason: "แก้ข้อมูล" }] });
+  expect(active.cycle.fullInterestCents).toBe(3000);
+  expect(canceled).toEqual(calculateInterestForecast({ ...input, rateChanges: [] }));
+  expect(canceled.cycle.fullInterestCents).toBe(300000);
+});
+
 describe("daily interest and calendar month forecast", () => {
   it("earns 1,000 after ten of thirty days and forecasts 3,000 through month end", () => {
     const result = forecast();

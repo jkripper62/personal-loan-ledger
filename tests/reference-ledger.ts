@@ -64,7 +64,7 @@ export function referenceLedger(input: Input, memo = new Map<string, ReferenceBa
   let posted = 0, accrued = 0;
   while (chargeStart < limit) {
     const cut = calendarEnd < limit ? calendarEnd : limit;
-    const rate = [...input.rateChanges].filter(change => change.loanId === loan.id && change.effectiveDate <= calendarStart)
+    const rate = [...input.rateChanges].filter(change => change.loanId === loan.id && !change.canceledAt && change.effectiveDate <= calendarStart)
       .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))[0]?.rateBps ?? loan.rateBps;
     const charge = roundedCharge(principalAt(chargeStart), rate, day(cut) - day(chargeStart), day(calendarEnd) - day(calendarStart));
     if (calendarEnd <= asOf && calendarEnd <= limit || stopped && stopped <= asOf && cut === stopped) posted += charge;

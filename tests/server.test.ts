@@ -79,6 +79,49 @@ const credentials = {
   email: "owner@example.com",
   password: "long-private-password",
 };
+it("corrects an entered rate and due date with audit history and explicitly canceled future rates", async () => {
+  const api = await client(undefined, undefined, () => new Date("2026-10-19T06:00:00Z"));
+  await api.request("/api/auth/setup", "POST", credentials);
+  const person = await api.request("/api/borrowers", "POST", { name: "แก้ข้อมูลทดสอบ" });
+  const created = await api.request("/api/loans", "POST", { ...loanInput(person.body.id), source: "new", rateBps: 100 });
+  const scheduled = await api.request("/api/rate-changes", "POST", {
+    loanId: created.body.id, effectiveDate: "2026-11-15", rateBps: 10, reason: "กรอกผิด",
+  });
+  expect(scheduled.response.status).toBe(201);
+  expect((await api.request("/api/rate-changes", "POST", {
+    loanId: created.body.id, effectiveDate: "2026-10-19", rateBps: 100, reason: "วันผิด",
+  })).response.status).toBe(400);
+  const corrected = await api.request(`/api/loans/${created.body.id}/correction`, "POST", {
+    rateBps: 1000, dueDate: "2026-11-20", reason: "แก้ข้อมูลที่กรอกผิดตามจริง", cancelRateChangeIds: [scheduled.body.id],
+  });
+  expect(corrected.response.status).toBe(200);
+  expect(corrected.body).toMatchObject({ rateBps: 1000, dueDate: "2026-11-20", source: "new", anchorDay: 15 });
+  const data = await api.request("/api/data");
+  expect(data.body.rateChanges).toMatchObject([{ id: scheduled.body.id, rateBps: 10, cancelReason: "แก้ข้อมูลที่กรอกผิดตามจริง" }]);
+  expect(data.text).toContain('loan.correct');
+  expect(data.text).toContain('before');
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", { rateBps: 700, dueDate: "2026-11-21", reason: "" })).response.status).toBe(400);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", { rateBps: 700, dueDate: "2026-11-21", reason: "ผิด", principalCents: 0 })).response.status).toBe(400);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", { rateBps: 700, dueDate: "2026-09-01", reason: "ผิด" })).response.status).toBe(400);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", { rateBps: 700, dueDate: "2026-11-21", reason: "ผิด", cancelRateChangeIds: ["foreign"] })).response.status).toBe(404);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ rateBps: 1000, dueDate: "2026-11-20" }]);
+  expect((await api.request("/api/loans/unknown/correction", "POST", { rateBps: 1000, dueDate: "2026-11-20", reason: "ผิด" })).response.status).toBe(404);
+  expect((await api.request("/api/rate-changes", "POST", { loanId: created.body.id, effectiveDate: "2026-11-15", rateBps: 100, reason: "ตั้งรายการใหม่แทนที่ยกเลิก" })).response.status).toBe(201);
+});
+it("rolls back an initial-rate correction if it invalidates a later exact payoff", async () => {
+  const api = await client();
+  await api.request("/api/auth/setup", "POST", credentials);
+  const person = await api.request("/api/borrowers", "POST", { name: "ตรวจประวัติ" });
+  const created = await api.request("/api/loans", "POST", loanInput(person.body.id));
+  expect((await api.request("/api/payments", "POST", {
+    loanId: created.body.id, date: "2026-09-25", totalCents: 1033333, principalCents: 1000000, interestCents: 33333, isPayoff: true,
+  })).response.status).toBe(201);
+  const before = (await api.request("/api/data")).text;
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", {
+    rateBps: 700, dueDate: "2026-11-20", reason: "แก้ย้อนหลัง",
+  })).response.status).toBe(400);
+  expect((await api.request("/api/data")).text).toBe(before);
+});
 it("atomically creates a single owner under concurrent setup and rejects a foreign Host", async () => {
   const api = await client();
   const replies = await Promise.all([

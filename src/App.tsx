@@ -1065,14 +1065,14 @@ function LoanDetail({
                 >
                   ปิดหนี้ตามวัน
                 </Button>
-                <Button secondary onClick={() => open({ kind: "due", loan })}>
-                  เลื่อนวันนัด
+                <Button secondary onClick={() => open({ kind: "loan-correction", loan })}>
+                  แก้ดอก / วันนัด
                 </Button>
                 <Button secondary disabled={busy} onClick={() => setStatus(loan)}>
                   {loan.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"}
                 </Button>
                 <Button secondary onClick={() => open({ kind: "rate", loan })}>
-                  เปลี่ยนอัตรา
+                  เปลี่ยนอัตรางวดถัดไป
                 </Button>
               </>
             )}
@@ -1189,12 +1189,13 @@ function LoanDetail({
           {data.rateChanges
             .filter((r) => r.loanId === loan.id)
             .map((r) => (
-              <div key={r.id}>
+              <div key={r.id} className={r.canceledAt ? "canceled" : ""}>
                 <span className="timeline-dot" />
                 <strong>
                   อัตรา {r.rateBps / 100}% มีผล {date(r.effectiveDate)}
                 </strong>
                 <p>{r.reason}</p>
+                {r.canceledAt && <small>ยกเลิก: {r.cancelReason}</small>}
               </div>
             ))}
           {data.adjustments

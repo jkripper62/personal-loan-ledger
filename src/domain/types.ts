@@ -21,6 +21,7 @@ export interface Payment {
 export interface RateChange {
   id: string; loanId: string; effectiveDate: string; rateBps: number;
   reason: string; createdAt: string;
+  canceledAt?: string; cancelReason?: string;
 }
 export interface Adjustment {
   id: string; loanId: string; date: string; principalDeltaCents: number;
