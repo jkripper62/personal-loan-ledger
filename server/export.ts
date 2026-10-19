@@ -1,6 +1,7 @@
 import type { LedgerData } from "../src/domain/types.js";
 import { calculateLedger } from "../src/domain/ledger.js";
 import { compareEvents } from "../src/domain/chronology.js";
+import { loanDisplayName } from "../src/domain/loan-name.js";
 
 const money = (value: number) => (value / 100).toFixed(2);
 function csvCell(value: string): string {
@@ -43,7 +44,7 @@ export function createLedgerCsv(data: LedgerData, asOf: string): string {
     });
     rows.push([
       "สรุปยอด",
-      names.get(loan.borrowerId) ?? "",
+      loanDisplayName(names.get(loan.borrowerId) ?? "", loan),
       loan.id,
       "",
       asOf,
@@ -66,7 +67,7 @@ export function createLedgerCsv(data: LedgerData, asOf: string): string {
     const loan = loans.get(payment.loanId);
     rows.push([
       "รับชำระ",
-      loan ? (names.get(loan.borrowerId) ?? "") : "",
+      loan ? loanDisplayName(names.get(loan.borrowerId) ?? "", loan) : "",
       payment.loanId,
       payment.id,
       payment.date,

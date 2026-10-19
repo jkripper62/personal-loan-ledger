@@ -44,6 +44,7 @@ import {
 import { calculateLedger, addMonths, todayBangkok } from "./domain/ledger";
 import { calculateInterestForecast } from "./domain/forecast";
 import { isLoanOverdue } from "./domain/status";
+import { loanDisplayName } from "./domain/loan-name";
 import { InterestOverview, InterestDetail } from "./components/interest";
 import type {
   Borrower,
@@ -342,7 +343,7 @@ export default function App() {
     data.borrowers.find((b) => b.id === id)?.name || "ผู้กู้";
   const loans = data.loans.filter(
     (l) =>
-      borrowerName(l.borrowerId).includes(search) &&
+      loanDisplayName(borrowerName(l.borrowerId), l).includes(search) &&
       (filter === "all" ||
         (filter === "closed"
           ? snapshots.get(l.id)?.closed
@@ -420,7 +421,7 @@ export default function App() {
           <div>
             <h1>
               {selectedLoan
-                ? borrowerName(selectedLoan.borrowerId)
+                ? loanDisplayName(borrowerName(selectedLoan.borrowerId), selectedLoan)
                 : page === "overview"
                   ? "ภาพรวมบัญชี"
                   : nav.find((n) => n.id === page)?.title}
@@ -432,6 +433,7 @@ export default function App() {
                   ? "ติดตามเงินต้น ดอกเบี้ย และการชำระในที่เดียว"
                   : "บัญชีเงินกู้ส่วนตัวของคุณ"}
             </p>
+            {selectedLoan && <button className="text-button" onClick={() => setModal({ kind: "loan-purpose", loan: selectedLoan })}>ตั้งชื่อรายการกู้</button>}
           </div>
           <div className="header-actions">
             <Button onClick={() => setModal({ kind: "loan" })}>
@@ -577,7 +579,7 @@ export default function App() {
                                 {borrowerName(l.borrowerId).slice(0, 1)}
                               </span>
                               <div>
-                                <strong>{borrowerName(l.borrowerId)}</strong>
+                                <strong>{loanDisplayName(borrowerName(l.borrowerId), l)}</strong>
                                 <small>{date(l.dueDate)}</small>
                               </div>
                               <span
@@ -718,7 +720,7 @@ export default function App() {
                               onClick={() => setSelected(p.loanId)}
                             >
                               <td>
-                                {loan ? borrowerName(loan.borrowerId) : ""}
+                                {loan ? loanDisplayName(borrowerName(loan.borrowerId), loan) : ""}
                                 <small>{date(p.date)}{p.dateEstimated && " · วันที่บันทึก ไม่ทราบวันจ่ายจริง"}</small>
                               </td>
                               <td>฿{money(p.totalCents)}</td>
@@ -781,7 +783,7 @@ export default function App() {
                     {dueLoans.map((l) => (
                       <div key={l.id}>
                         <div>
-                          <h3>{borrowerName(l.borrowerId)}</h3>
+                          <h3>{loanDisplayName(borrowerName(l.borrowerId), l)}</h3>
                           <p>
                             นัดชำระ {date(l.dueDate)} · ดอกค้าง ฿
                             {money(snapshots.get(l.id)?.interestCents || 0)}
@@ -902,7 +904,7 @@ function LoanTable({
               <tr key={l.id} onClick={() => select(l.id)}>
                 <td>
                   <button className="table-name" onClick={() => select(l.id)}>
-                    {name(l.borrowerId)}
+                    {loanDisplayName(name(l.borrowerId), l)}
                   </button>
                   <small>
                     {s?.currentRateBps === 0
@@ -925,7 +927,7 @@ function LoanTable({
                   </span>
                   {!s?.closed && (isLoanOverdue(l, todayBangkok()) || l.statusOverride === "normal") && <button
                     className="text-button status-toggle" disabled={busy}
-                    aria-label={`${l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"} ${name(l.borrowerId)} ต้นเริ่ม ${money(l.principalCents)}`}
+                    aria-label={`${l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"} ${loanDisplayName(name(l.borrowerId), l)} ต้นเริ่ม ${money(l.principalCents)}`}
                     onClick={(event) => { event.stopPropagation(); setStatus(l); }}>
                     {l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"}
                   </button>}

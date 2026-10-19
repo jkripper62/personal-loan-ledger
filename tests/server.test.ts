@@ -79,6 +79,32 @@ const credentials = {
   email: "owner@example.com",
   password: "long-private-password",
 };
+it("labels each loan separately while preserving the borrower, money history, export and audit", async () => {
+  const api = await client();
+  await api.request("/api/auth/setup", "POST", credentials);
+  const person = await api.request("/api/borrowers", "POST", { name: "ตอง" });
+  const first = await api.request("/api/loans", "POST", { ...loanInput(person.body.id), purpose: "ค่าเหล้า" });
+  const second = await api.request("/api/loans", "POST", { ...loanInput(person.body.id), purpose: "กู้เอง" });
+  expect(first.body.purpose).toBe("ค่าเหล้า");
+  const renamed = await api.request(`/api/loans/${first.body.id}`, "PATCH", { purpose: "  คอนเนคชั่นเอาไปปล่อยต่อ  ", reason: "ตั้งชื่อรายการ" });
+  expect(renamed.response.status).toBe(200);
+  expect(renamed.body).toMatchObject({ purpose: "คอนเนคชั่นเอาไปปล่อยต่อ", principalCents: 1000000, borrowerId: person.body.id, dueDate: "2026-10-01", rateBps: 1000 });
+  const saved = await api.request("/api/data");
+  expect(saved.body.borrowers).toMatchObject([{ id: person.body.id, name: "ตอง" }]);
+  expect(saved.body.loans).toMatchObject([{ id: first.body.id, purpose: "คอนเนคชั่นเอาไปปล่อยต่อ" }, { id: second.body.id, purpose: "กู้เอง" }]);
+  expect(saved.body.payments).toEqual([]);
+  expect(saved.body.adjustments).toEqual([]);
+  expect(saved.text).toContain('loan.update');
+  const csv = await api.request("/api/export");
+  expect(csv.text).toContain("ตอง (คอนเนคชั่นเอาไปปล่อยต่อ)");
+  expect(csv.text).toContain("ตอง (กู้เอง)");
+  const reminders = await api.request("/api/reminders");
+  expect(reminders.text).toContain("ตอง (คอนเนคชั่นเอาไปปล่อยต่อ)");
+  expect((await api.request(`/api/loans/${first.body.id}`, "PATCH", { purpose: 123, reason: "ผิด" })).response.status).toBe(400);
+  expect((await api.request(`/api/loans/${first.body.id}`, "PATCH", { purpose: "x".repeat(201), reason: "ยาวเกิน" })).response.status).toBe(400);
+  expect((await api.request(`/api/loans/${first.body.id}`, "PATCH", { purpose: "", reason: "ลบชื่อรายการ" })).body.purpose).toBe("");
+  expect((await api.request("/api/loans", "POST", { ...loanInput(person.body.id), purpose: 123 })).response.status).toBe(400);
+});
 it("corrects an entered rate and due date with audit history and explicitly canceled future rates", async () => {
   const api = await client(undefined, undefined, () => new Date("2026-10-19T06:00:00Z"));
   await api.request("/api/auth/setup", "POST", credentials);

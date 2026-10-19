@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Copy, Check, X } from "lucide-react";
 import { calculateLedger, addMonths, todayBangkok } from "../domain/ledger";
+import { loanDisplayName } from "../domain/loan-name";
 import type {
   Borrower,
   Loan,
@@ -14,7 +15,7 @@ export type Modal =
   | { kind: "loan"; borrowerId?: string }
   | { kind: "edit-payment"; loan: Loan; payment: Payment }
   | {
-      kind: "payment" | "payoff" | "rate" | "adjustment" | "loan-correction" | "contact";
+      kind: "payment" | "payoff" | "rate" | "adjustment" | "loan-correction" | "loan-purpose" | "contact";
       loan: Loan;
     }
   | { kind: "attachment"; loan: Loan }
@@ -71,13 +72,14 @@ export function ModalView({
     loan ? String((modal.kind === "loan-correction" ? loan.rateBps : s?.currentRateBps ?? loan.rateBps) / 100) : "",
   );
   const [remainingPrincipal, setRemainingPrincipal] = useState(() => loan ? String((snapshots.get(loan.id)?.principalCents ?? loan.principalCents) / 100) : "");
+  const [purpose, setPurpose] = useState(loan?.purpose ?? "");
   const futureRates = loan ? data.rateChanges.filter(r => r.loanId === loan.id && !r.canceledAt && r.effectiveDate > todayBangkok()) : [];
   const availableRateDates = loan && s && modal.kind === "rate"
     ? Array.from({ length: 24 }, (_, index) => addMonths(s.currentCycleEndDate, index, loan.anchorDay))
       .filter(day => !futureRates.some(r => r.effectiveDate === day)) : [];
   const [message, setMessage] = useState(
     loan
-      ? `สวัสดี ${borrower?.nickname || borrower?.name} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} ดอกค้าง ${money(snapshots.get(loan.id)?.interestCents || 0)} บาท เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
+      ? `สวัสดี ${loanDisplayName(borrower?.nickname || borrower?.name || "ผู้กู้", loan)} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} ดอกค้าง ${money(snapshots.get(loan.id)?.interestCents || 0)} บาท เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
       : "",
   );
   const titles = {
@@ -92,6 +94,7 @@ export function ModalView({
     rate: "เปลี่ยนอัตรางวดถัดไป",
     adjustment: "เพิ่ม/ลดยอด (ขั้นสูง)",
     "loan-correction": "แก้ต้น / ดอก / วันนัด",
+    "loan-purpose": "ตั้งชื่อรายการกู้",
     contact: "เตรียมข้อความติดตาม",
     attachment: "แนบหลักฐาน",
     "payment-attachment": "แนบสลิปการชำระ",
@@ -136,6 +139,7 @@ export function ModalView({
               : addMonths(startDate, 1, anchorDay),
           anchorDay,
           dueDate: field(f, "dueDate"),
+          purpose: field(f, "purpose"),
           notes: field(f, "notes"),
         });
       } else if (modal.kind === "payment" || modal.kind === "edit-payment" || modal.kind === "payoff") {
@@ -194,6 +198,8 @@ export function ModalView({
           },
           "POST",
         );
+      else if (modal.kind === "loan-purpose")
+        await submit(`/loans/${modal.loan.id}`, { purpose: field(f, "purpose"), reason: "เจ้าของตั้งชื่อรายการกู้" }, "PATCH");
       else if (modal.kind === "cancel")
         await submit(modal.path, { reason: field(f, "reason") });
       else if (modal.kind === "contact")
@@ -248,7 +254,7 @@ export function ModalView({
         <header>
           <div>
             <h2 id="modal-title">{titles[modal.kind]}</h2>
-            {borrower && <p>{borrower.name}</p>}
+            {borrower && <p>{loan ? loanDisplayName(borrower.name, loan) : borrower.name}</p>}
             {loan && <small className="modal-loan-context">ต้นเริ่มบันทึก ฿{money(loan.principalCents)} · นัดชำระ {date(loan.dueDate)}</small>}
           </div>
           {modal.kind !== "recovery" && (
@@ -439,6 +445,7 @@ export function ModalView({
                       </>
                     )}
                   </div>
+                  <Input label="ชื่อรายการ / กู้ไปเพื่ออะไร" name="purpose" hint="เช่น ค่าเหล้า, คอนเนคชั่นเอาไปปล่อยต่อ, กู้เอง" />
                   <Input label="หมายเหตุ / ข้อตกลง" name="notes" />
                 </>
               )}
@@ -619,6 +626,19 @@ export function ModalView({
                   </div>}
                   <Input label="เหตุผล *" name="reason" required />
                   <p className="panel-note">เปลี่ยนวันนัดชำระได้ แต่รอบตัดดอกยังเดิม รายการที่ตั้งอัตราล่วงหน้าไว้จะยังใช้ตามเดิมหากไม่ได้เลือกยกเลิก</p>
+                </>
+              )}
+              {modal.kind === "loan-purpose" && (
+                <>
+                  <label className="field">ชื่อรายการ / กู้ไปเพื่ออะไร
+                    <input name="purpose" maxLength={200} value={purpose} onChange={e => setPurpose(e.target.value)} />
+                    <small>กรอกเฉพาะข้อความในวงเล็บ เช่น ค่าเหล้า, คอนเนคชั่นเอาไปปล่อยต่อ หรือกู้เอง เว้นว่างเพื่อลบชื่อรายการ</small>
+                  </label>
+                  <div className="payment-interest-context" role="status">
+                    <p>ตัวอย่างชื่อที่จะแสดง</p>
+                    <strong>{loanDisplayName(borrower?.name || "ผู้กู้", { purpose })}</strong>
+                  </div>
+                  <p className="panel-note">ชื่อนี้ใช้เฉพาะสัญญานี้ ยอดเงินและผู้กู้ยังเป็นคนเดิม</p>
                 </>
               )}
               {modal.kind === "cancel" && (

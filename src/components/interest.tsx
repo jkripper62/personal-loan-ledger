@@ -1,6 +1,7 @@
 import type { InterestForecast, LedgerData, Loan } from "../domain/types";
 import { date, money } from "./ui";
 import { useState } from "react";
+import { loanDisplayName } from "../domain/loan-name";
 
 export function InterestOverview({ data, forecasts, select, today }: {
   data: LedgerData; forecasts: Map<string, InterestForecast>;
@@ -20,8 +21,8 @@ export function InterestOverview({ data, forecasts, select, today }: {
     }), { earned: 0, full: 0, month: 0 });
     return [{ borrower, items, amounts }];
   });
-  const visiblePeople = people.filter(({ borrower }) =>
-    `${borrower.name} ${borrower.nickname}`.includes(search.trim()),
+  const visiblePeople = people.filter(({ borrower, items }) =>
+    `${borrower.name} ${borrower.nickname} ${items.map(({ loan }) => loan.purpose || "").join(" ")}`.includes(search.trim()),
   );
   const totals = [...forecasts.values()].reduce((sum, item) => ({
     earned: sum.earned + item.month.earnedInterestCents,
@@ -51,7 +52,7 @@ export function InterestOverview({ data, forecasts, select, today }: {
             <summary>ดูสูตรและรายการกู้ของ{borrower.name}</summary>
             {items.map(({ loan, forecast }) => (
               <div className="interest-person-loan" key={loan.id}>
-                <button className="interest-loan" onClick={() => select(loan.id)}>เปิดรายการ · ต้นเริ่ม ฿{money(loan.principalCents)}</button>
+                <button className="interest-loan" onClick={() => select(loan.id)}>{loanDisplayName(borrower.name, loan)} · ต้นเริ่ม ฿{money(loan.principalCents)}</button>
                 <p>{forecast.cycle.accruing ? `ดอกเต็มรอบ ฿${money(forecast.cycle.fullInterestCents)} ÷ ${forecast.cycle.fullDays} วัน × ${forecast.cycle.elapsedDays} วัน` : "หยุดคิดดอกแล้ว"} = ฿{money(forecast.cycle.earnedInterestCents)}</p>
                 <p>ครบงวด {date(forecast.cycle.endDate)} คาดการณ์ ฿{money(forecast.cycle.forecastInterestCents)}</p>
                 <p>สิ้นเดือน ฿{money(forecast.month.forecastInterestCents)} · เริ่มนับ {date(forecast.cycle.chargeStartDate)}</p>
@@ -80,7 +81,7 @@ export function InterestOverview({ data, forecasts, select, today }: {
           if (!item) return null;
           const borrower = data.borrowers.find((person) => person.id === loan.borrowerId);
           return <tr key={loan.id}>
-            <td><button className="interest-loan" onClick={() => select(loan.id)}>{borrower?.name || "ผู้กู้"}</button><small>ต้นเริ่ม ฿{money(loan.principalCents)}</small></td>
+            <td><button className="interest-loan" onClick={() => select(loan.id)}>{loanDisplayName(borrower?.name || "ผู้กู้", loan)}</button><small>ต้นเริ่ม ฿{money(loan.principalCents)}</small></td>
             <td>{item.cycle.elapsedDays} / {item.cycle.fullDays} วัน<small>ถึง {date(item.cycle.endDate)}</small></td>
             <td>฿{money(item.cycle.earnedInterestCents)}</td>
             <td>{item.cycle.accruing ? `฿${money(item.cycle.fullInterestCents)}` : "หยุดคิดดอกแล้ว"}</td>

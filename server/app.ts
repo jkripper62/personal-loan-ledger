@@ -30,6 +30,7 @@ import {
 } from "../src/domain/ledger.js";
 import { compareEvents } from "../src/domain/chronology.js";
 import { isLoanOverdue } from "../src/domain/status.js";
+import { loanDisplayName } from "../src/domain/loan-name.js";
 import { createLedgerCsv } from "./export.js";
 
 const hashPassword = (
@@ -756,6 +757,7 @@ export function createApp({
           firstCycleEndDate: date(body.firstCycleEndDate, "วันตัดรอบถัดไป"),
           anchorDay: integer(body.anchorDay, "วันตัดรอบ"),
           dueDate: date(body.dueDate, "วันนัดชำระ"),
+          purpose: text(body.purpose, "ชื่อรายการ", false, 200),
           notes: text(body.notes, "หมายเหตุ"),
           createdAt: now(),
         };
@@ -798,14 +800,14 @@ export function createApp({
           const reason = text(body.reason, "เหตุผล", true);
           if (
             Object.keys(body).some(
-              (key) => !["dueDate", "notes", "reason", "statusOverride"].includes(key),
+              (key) => !["dueDate", "notes", "reason", "statusOverride", "purpose"].includes(key),
             )
           )
-            return fail(400, "เปลี่ยนได้เฉพาะวันนัดชำระ หมายเหตุ และสถานะ");
+            return fail(400, "เปลี่ยนได้เฉพาะวันนัดชำระ ชื่อรายการ หมายเหตุ และสถานะ");
           const dueDate = body.dueDate === undefined ? loan.dueDate : date(body.dueDate, "วันนัดชำระ");
           if (dueDate < loan.startDate)
             return fail(400, "วันนัดชำระต้องไม่ก่อนวันเริ่มนับยอด");
-          const before = { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride };
+          const before = { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride, purpose: loan.purpose };
           if (body.statusOverride !== undefined) {
             if (body.statusOverride !== "normal" && body.statusOverride !== "auto")
               return fail(400, "สถานะต้องเป็นปกติหรือตามวันนัด");
@@ -813,6 +815,7 @@ export function createApp({
             else delete loan.statusOverride;
           }
           loan.dueDate = dueDate;
+          if (body.purpose !== undefined) loan.purpose = text(body.purpose, "ชื่อรายการ", false, 200);
           if (body.notes !== undefined)
             loan.notes = text(body.notes, "หมายเหตุ");
           audit(
@@ -822,7 +825,7 @@ export function createApp({
             JSON.stringify({
               reason,
               before,
-              after: { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride },
+              after: { dueDate: loan.dueDate, notes: loan.notes, statusOverride: loan.statusOverride, purpose: loan.purpose },
             }),
           );
           return loan;
@@ -1050,8 +1053,7 @@ export function createApp({
           )
           .map((loan) => ({
             loanId: loan.id,
-            borrowerName:
-              data.borrowers.find((b) => b.id === loan.borrowerId)?.name ?? "",
+            borrowerName: loanDisplayName(data.borrowers.find((b) => b.id === loan.borrowerId)?.name ?? "", loan),
             dueDate: loan.dueDate,
             kind:
               loan.dueDate === currentDate
