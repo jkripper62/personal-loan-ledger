@@ -843,8 +843,8 @@ export function createApp({
       if (correctLoan && method === "POST") {
         const corrected = mutate((data) => {
           const loan = getLoan(data, correctLoan[1]);
-          if (Object.keys(body).some(key => !["rateBps", "dueDate", "reason", "cancelRateChangeIds"].includes(key)))
-            return fail(400, "แก้ได้เฉพาะอัตราเดิมและวันนัดชำระ");
+          if (Object.keys(body).some(key => !["rateBps", "dueDate", "reason", "cancelRateChangeIds", "remainingPrincipalCents"].includes(key)))
+            return fail(400, "แก้ได้เฉพาะต้นคงเหลือ อัตราเดิม และวันนัดชำระ");
           const reason = text(body.reason, "เหตุผลที่แก้ไข", true);
           const rateBps = integer(body.rateBps, "อัตราดอกที่ถูกต้อง");
           const dueDate = date(body.dueDate, "วันนัดชำระ");
@@ -852,7 +852,9 @@ export function createApp({
           const requested = body.cancelRateChangeIds ?? [];
           if (!Array.isArray(requested) || requested.some(id => typeof id !== "string"))
             return fail(400, "รายการอัตราที่จะยกเลิกไม่ถูกต้อง");
-          const before = { rateBps: loan.rateBps, dueDate: loan.dueDate };
+          const remainingPrincipalCents = body.remainingPrincipalCents === undefined
+            ? undefined : integer(body.remainingPrincipalCents, "เงินต้นคงเหลือที่ถูกต้อง");
+          const before = { rateBps: loan.rateBps, dueDate: loan.dueDate, remainingPrincipalCents: ledger(data, loan).principalCents };
           for (const id of new Set(requested)) {
             const change = required(data.rateChanges.find(r => r.id === id && r.loanId === loan.id), "รายการอัตรา");
             if (change.effectiveDate <= today()) return fail(400, "ยกเลิกได้เฉพาะอัตราที่ตั้งล่วงหน้า");
@@ -863,9 +865,18 @@ export function createApp({
           }
           loan.rateBps = rateBps;
           loan.dueDate = dueDate;
+          let principalAdjustmentId: string | undefined;
+          if (remainingPrincipalCents !== undefined && remainingPrincipalCents !== before.remainingPrincipalCents) {
+            const adjustment: Adjustment = { id: randomUUID(), loanId: loan.id, date: today(),
+              principalDeltaCents: remainingPrincipalCents - before.remainingPrincipalCents, interestDeltaCents: 0,
+              reason, createdAt: now(), canceledAt: null, cancelReason: null };
+            data.adjustments.push(adjustment);
+            principalAdjustmentId = adjustment.id;
+          }
           replay(data, loan);
           audit(data, "loan.correct", loan.id, JSON.stringify({ reason, before,
-            after: { rateBps: loan.rateBps, dueDate: loan.dueDate }, cancelRateChangeIds: requested }));
+            after: { rateBps: loan.rateBps, dueDate: loan.dueDate, remainingPrincipalCents: ledger(data, loan).principalCents },
+            principalAdjustmentId, cancelRateChangeIds: requested }));
           return loan;
         });
         return json(response, 200, corrected);

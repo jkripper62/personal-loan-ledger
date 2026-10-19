@@ -1066,7 +1066,7 @@ function LoanDetail({
                   ปิดหนี้ตามวัน
                 </Button>
                 <Button secondary onClick={() => open({ kind: "loan-correction", loan })}>
-                  แก้ดอก / วันนัด
+                  แก้ต้น / ดอก / วันนัด
                 </Button>
                 <Button secondary disabled={busy} onClick={() => setStatus(loan)}>
                   {loan.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"}
@@ -1080,7 +1080,7 @@ function LoanDetail({
               secondary
               onClick={() => open({ kind: "adjustment", loan })}
             >
-              ปรับปรุงยอด
+              เพิ่ม/ลดยอด (ขั้นสูง)
             </Button>
             <Button
               secondary

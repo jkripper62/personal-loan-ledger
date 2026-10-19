@@ -70,6 +70,7 @@ export function ModalView({
   const [ratePercent, setRatePercent] = useState(() =>
     loan ? String((modal.kind === "loan-correction" ? loan.rateBps : s?.currentRateBps ?? loan.rateBps) / 100) : "",
   );
+  const [remainingPrincipal, setRemainingPrincipal] = useState(() => loan ? String((snapshots.get(loan.id)?.principalCents ?? loan.principalCents) / 100) : "");
   const futureRates = loan ? data.rateChanges.filter(r => r.loanId === loan.id && !r.canceledAt && r.effectiveDate > todayBangkok()) : [];
   const availableRateDates = loan && s && modal.kind === "rate"
     ? Array.from({ length: 24 }, (_, index) => addMonths(s.currentCycleEndDate, index, loan.anchorDay))
@@ -89,8 +90,8 @@ export function ModalView({
     "edit-payment": "แก้ไขรับชำระ",
     payoff: "ปิดหนี้ตามวัน",
     rate: "เปลี่ยนอัตรางวดถัดไป",
-    adjustment: "ปรับปรุงยอด",
-    "loan-correction": "แก้ดอก / วันนัด",
+    adjustment: "เพิ่ม/ลดยอด (ขั้นสูง)",
+    "loan-correction": "แก้ต้น / ดอก / วันนัด",
     contact: "เตรียมข้อความติดตาม",
     attachment: "แนบหลักฐาน",
     "payment-attachment": "แนบสลิปการชำระ",
@@ -186,6 +187,7 @@ export function ModalView({
           `/loans/${modal.loan.id}/correction`,
           {
             rateBps: Math.round(Number(field(f, "rate")) * 100),
+            remainingPrincipalCents: cents(f, "remainingPrincipal"),
             dueDate: field(f, "dueDate"),
             reason: field(f, "reason"),
             cancelRateChangeIds: f.getAll("cancelRateChangeIds").map(String),
@@ -543,7 +545,7 @@ export function ModalView({
                     </label>
                   </div>
                   <p className="panel-note">
-                    ใช้สำหรับตกลงอัตราใหม่ในอนาคต หากกรอกอัตราเดิมผิด ให้ปิดหน้านี้แล้วเลือก “แก้ดอก / วันนัด”
+                    ใช้สำหรับตกลงอัตราใหม่ในอนาคต หากกรอกอัตราเดิมผิด ให้ปิดหน้านี้แล้วเลือก “แก้ต้น / ดอก / วันนัด”
                   </p>
                   <Input label="เหตุผล *" name="reason" required />
                 </>
@@ -559,15 +561,16 @@ export function ModalView({
                   />
                   <div className="form-grid">
                     <Input
-                      label="ปรับต้น (บาท) *"
+                      label="จำนวนต้นที่จะเพิ่ม/ลด (บาท) *"
                       name="principalDelta"
                       type="number"
                       step="0.01"
                       value="0"
+                      hint="เป็นส่วนต่าง: ใส่ -40000 เพื่อลดจาก 60000 เหลือ 20000"
                       required
                     />
                     <Input
-                      label="ปรับดอก (บาท) *"
+                      label="จำนวนดอกที่จะเพิ่ม/ลด (บาท) *"
                       name="interestDelta"
                       type="number"
                       step="0.01"
@@ -576,7 +579,7 @@ export function ModalView({
                     />
                   </div>
                   <p className="panel-note">
-                    ค่าบวกเพิ่มยอด ค่าลบลดยอด การปรับจะเก็บในประวัติ
+                    ช่องนี้รับจำนวนที่จะเพิ่มหรือลด หากต้องการใส่ยอดสุดท้าย ให้เลือก “แก้ต้น / ดอก / วันนัด” แทน ค่าบวกเพิ่มยอด ค่าลบลดยอด
                   </p>
                   <Input label="เหตุผล *" name="reason" required />
                 </>
@@ -584,14 +587,20 @@ export function ModalView({
               {modal.kind === "loan-correction" && (
                 <>
                   <p className="panel-note">แก้ข้อมูลที่กรอกผิด โดยใช้อัตราที่ถูกต้องตั้งแต่วันเริ่มบันทึก เก็บค่าเดิมและเหตุผลไว้ในประวัติ</p>
+                  <label className="field">เงินต้นคงเหลือที่ถูกต้อง (บาท) *
+                    <input name="remainingPrincipal" type="number" min="0" step="0.01" required value={remainingPrincipal} onChange={e => setRemainingPrincipal(e.target.value)} />
+                    <small>กรอกยอดสุดท้ายที่ต้องการ เช่น 20000 เมื่อต้องเหลือต้น 20,000 บาท</small>
+                  </label>
+                  <p className="panel-note">ต้นคงเหลือปัจจุบัน ฿{money(snapshots.get(modal.loan.id)?.principalCents ?? modal.loan.principalCents)} → ยอดที่ต้องการ ฿{money(Math.round(Number(remainingPrincipal) * 100) || 0)}
+                    <br />การแก้ต้นจะเก็บรายการปรับส่วนต่าง ณ วันนี้ ไม่บันทึกเป็นเงินรับชำระ</p>
                   <label className="field">อัตราดอกที่ถูกต้องต่อเดือน (%) *
                     <input name="rate" type="number" min="0" step="0.01" required value={ratePercent} onChange={e => setRatePercent(e.target.value)} />
                     <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
                   </label>
                   <div className="payment-interest-context" role="status">
-                    <p>ดอกเต็มเดือนจากต้นเริ่มบันทึก ฿{money(modal.loan.principalCents)}</p>
+                    <p>ตัวอย่างดอกเต็มเดือนจากต้นที่ระบุ ฿{money(Math.round(Number(remainingPrincipal) * 100) || 0)}</p>
                     <strong>{Number.isFinite(Number(ratePercent)) && Number(ratePercent) >= 0
-                      ? `${Number(ratePercent)}% = ฿${money(Math.round(modal.loan.principalCents * Number(ratePercent) / 100))}` : "กรอกอัตราที่ถูกต้อง"}</strong>
+                      ? `${Number(ratePercent)}% = ฿${money(Math.round(Number(remainingPrincipal) * Number(ratePercent)) || 0)}` : "กรอกอัตราที่ถูกต้อง"}</strong>
                   </div>
                   <Input
                     label="วันนัดชำระใหม่ *"

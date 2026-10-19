@@ -121,6 +121,32 @@ it("rolls back an initial-rate correction if it invalidates a later exact payoff
     rateBps: 700, dueDate: "2026-11-20", reason: "แก้ย้อนหลัง",
   })).response.status).toBe(400);
   expect((await api.request("/api/data")).text).toBe(before);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", {
+    rateBps: 1000, remainingPrincipalCents: 200000, dueDate: "2026-11-20", reason: "เปลี่ยนต้นหลังปิดหนี้",
+  })).response.status).toBe(400);
+  expect((await api.request("/api/data")).text).toBe(before);
+});
+it("sets the requested remaining principal instead of adding it, preserving interest and receipt history", async () => {
+  const api = await client(undefined, undefined, () => new Date("2026-10-19T08:00:00Z"));
+  await api.request("/api/auth/setup", "POST", credentials);
+  const person = await api.request("/api/borrowers", "POST", { name: "ต้นต้องเหลือสองหมื่น" });
+  const created = await api.request("/api/loans", "POST", { ...loanInput(person.body.id), principalCents: 2000000,
+    startDate: "2026-10-19", cycleStartDate: "2026-10-19", firstCycleEndDate: "2026-11-10", anchorDay: 10, dueDate: "2026-11-10" });
+  for (const interest of [1000, 0]) expect((await api.request("/api/adjustments", "POST", {
+    loanId: created.body.id, date: "2026-10-19", principalDeltaCents: 2000000, interestDeltaCents: interest, reason: "เผลอใส่ยอดสุดท้ายในช่องเพิ่มยอด",
+  })).response.status).toBe(201);
+  const correction = { rateBps: 1000, dueDate: "2026-11-10", remainingPrincipalCents: 2000000, reason: "เจ้าของยืนยันต้นคงเหลือ 20000" };
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", correction)).response.status).toBe(200);
+  const state = await api.request("/api/data");
+  expect(state.body.adjustments).toMatchObject([
+    { principalDeltaCents: 2000000, interestDeltaCents: 1000 },
+    { principalDeltaCents: 2000000, interestDeltaCents: 0 },
+    { principalDeltaCents: -4000000, interestDeltaCents: 0, date: "2026-10-19", reason: correction.reason },
+  ]);
+  expect(state.body.payments).toEqual([]);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", correction)).response.status).toBe(200);
+  expect((await api.request("/api/data")).body.adjustments).toHaveLength(3);
+  expect((await api.request(`/api/loans/${created.body.id}/correction`, "POST", { ...correction, remainingPrincipalCents: -1 })).response.status).toBe(400);
 });
 it("atomically creates a single owner under concurrent setup and rejects a foreign Host", async () => {
   const api = await client();

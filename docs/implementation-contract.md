@@ -4,7 +4,9 @@ Approved product spec: APP-SPEC.md. Local-PC phase supersedes cloud storage: the
 
 Shared models: src/domain/types.ts. All money is integer satang. Rate basis points: 100 = 1% monthly, 1000 = 10%. New loans and new rate changes on new loans must not exceed 125 bps monthly under the general 15% annual rule; historical loans may retain documented rates. New zero-interest loans are allowed.
 
-The owner's October 19 clarification adds correction of an incorrectly entered initial rate, separately from agreeing to a new future rate. `POST /api/loans/:id/correction` records the owner-supplied actual initial rate and due date with a required reason, for either loan source. It does not apply the new-origination rate ceiling to data corrections or change the source classification. The creation and future-rate endpoints retain their existing ceilings. The correction stores before and after values in audit history and replays all dependent events atomically. It cannot change principal, opening interest, or cycle dates. Any incompatible later exact payoff rejects the entire correction.
+The owner's October 19 clarification adds correction of an incorrectly entered initial rate, separately from agreeing to a new future rate. `POST /api/loans/:id/correction` records the owner-supplied actual initial rate and due date with a required reason, for either loan source. It does not apply the new-origination rate ceiling to data corrections or change the source classification. The creation and future-rate endpoints retain their existing ceilings. The correction stores before and after values in audit history and replays all dependent events atomically. It does not rewrite opening principal, opening interest, or cycle dates. Any incompatible later exact payoff rejects the entire correction.
+
+Optional `remainingPrincipalCents` is the target current remaining balance, not a delta. The server computes target minus the current replayed principal and appends a principal-only adjustment dated today, preserving the opening record and prior entries. The audit links the adjustment and records before and after balances. Submitting the same target again adds no adjustment. This correction never creates a receipt or changes `principalPaidCents`. The ordinary form labels the target balance and previews current-to-target amounts. The separate advanced adjustment form explicitly accepts signed deltas.
 
 Optional `cancelRateChangeIds` explicitly selects mistaken future rate entries belonging to the same loan. They must start after today. Canceled entries retain `canceledAt` and `cancelReason` and are excluded from balances, forecasts, and duplicate-date checks. Unselected future rates remain active. Corrections do not silently replace scheduled rates. The form previews entered percent and nominal monthly interest, labels 10 as 10%, and distinguishes correction from future scheduling. Future scheduling offers up to 24 valid cycle boundaries, excluding occupied dates.
 
@@ -37,7 +39,7 @@ Node server exports createApp({ dataDir, staticDir?, clock? }) -> { server, clos
 - PATCH /api/borrowers/:id -> Borrower
 - POST /api/loans -> Loan (omit id/createdAt)
 - PATCH /api/loans/:id { dueDate?, notes?, statusOverride?: 'normal'|'auto', reason } -> Loan; audit before and after, 'auto' removes the override
-- POST /api/loans/:id/correction { rateBps, dueDate, reason, cancelRateChangeIds?: string[] } -> Loan; retain audit, replay and commit atomically
+- POST /api/loans/:id/correction { rateBps, dueDate, reason, remainingPrincipalCents?: number, cancelRateChangeIds?: string[] } -> Loan; retain audit, replay and commit atomically
 - POST /api/payments -> Payment (omit generated/cancellation fields), validate real ledger
 - PATCH /api/payments/:id -> replacement Payment; same receipt fields and optional editReason, cannot move loans or edit canceled originals, retain and cancel the original
 - POST /api/payments/:id/cancel { reason } -> { ok:true }
