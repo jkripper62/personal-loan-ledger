@@ -3,6 +3,7 @@ export interface Borrower {
   facebookUrl: string; notes: string; createdAt: string;
 }
 export interface Loan {
+  recordStatus?: "test" | "trashed-test";
   purpose?: string;
   id: string; borrowerId: string; source: 'new' | 'existing';
   principalCents: number; openingInterestCents: number; rateBps: number;

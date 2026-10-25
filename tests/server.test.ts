@@ -79,6 +79,53 @@ const credentials = {
   email: "owner@example.com",
   password: "long-private-password",
 };
+it("excludes trial loans and their receipts from real exports and reminders, retains closed real loans, and supports reversible trial deletion", async () => {
+  const api = await client();
+  expect((await api.request("/api/loans/unknown/record-status", "POST", { action: "mark-test", reason: "ทดสอบ" })).response.status).toBe(401);
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "ทดสอบแยกบัญชี" });
+  const input = loanInput(borrower.body.id);
+  const realOpen = await api.request("/api/loans", "POST", { ...input, purpose: "กู้จริงเปิดอยู่" });
+  const realClosed = await api.request("/api/loans", "POST", { ...input, principalCents: 400000, purpose: "กู้จริงปิดแล้ว" });
+  expect((await api.request("/api/payments", "POST", { loanId: realClosed.body.id, date: "2026-09-20", principalCents: 400000,
+    interestCents: 40000, totalCents: 440000, isPayoff: true, payoffMode: "owner" })).response.status).toBe(201);
+  const trial = await api.request("/api/loans", "POST", { ...input, principalCents: 200000, purpose: "boom ทดลอง" });
+  const receipt = await api.request("/api/payments", "POST", { loanId: trial.body.id, date: "2026-09-20", principalCents: 200000,
+    interestCents: 20000, totalCents: 220000, isPayoff: true, payoffMode: "owner", note: "ทดลอง" });
+  expect(receipt.response.status).toBe(201);
+  const endpoint = `/api/loans/${trial.body.id}/record-status`;
+  expect((await api.request(endpoint, "POST", { action: "trash-test", reason: "ยังเป็นสัญญาจริง" })).response.status).toBe(400);
+  expect((await api.request(endpoint, "POST", { action: "mark-test", reason: "" })).response.status).toBe(400);
+  expect((await api.request(endpoint, "POST", { action: "arbitrary", reason: "ผิด" })).response.status).toBe(400);
+  expect((await api.request(endpoint, "POST", { action: "mark-test", reason: "เจ้าของยืนยันว่าเป็นยอดทดลอง" })).body.recordStatus).toBe("test");
+  const activeTrial = await api.request("/api/loans", "POST", { ...input, isTest: true, purpose: "ทดลองเปิดอยู่" });
+  expect(activeTrial.body.recordStatus).toBe("test");
+  expect((await api.request("/api/loans", "POST", { ...input, isTest: "true" })).response.status).toBe(400);
+  const csv = await api.request("/api/export");
+  expect(csv.text).toContain(realOpen.body.id);
+  expect(csv.text).toContain(realClosed.body.id);
+  expect(csv.text).toContain('"4000.00","400.00","4400.00"');
+  expect(csv.text).not.toContain(trial.body.id);
+  expect(csv.text).not.toContain(activeTrial.body.id);
+  expect(csv.text).not.toContain(receipt.body.id);
+  expect((await api.request("/api/reminders")).body.items).toMatchObject([{ loanId: realOpen.body.id }]);
+  expect((await api.request(endpoint, "POST", { action: "trash-test", reason: "ลบข้อมูลทดลอง" })).body.recordStatus).toBe("trashed-test");
+  expect((await api.request(endpoint, "POST", { action: "trash-test", reason: "ส่งซ้ำ" })).response.status).toBe(200);
+  expect((await api.request(`/api/loans/${trial.body.id}`, "PATCH", { purpose: "ไม่ควรแก้ถังขยะ" })).response.status).toBe(404);
+  expect((await api.request(`/api/payments/${receipt.body.id}`, "PATCH", { loanId: trial.body.id, date: "2026-09-20", principalCents: 200000,
+    interestCents: 0, totalCents: 200000, isPayoff: true, payoffMode: "owner" })).response.status).toBe(404);
+  const backup = await api.request("/api/backup");
+  expect(backup.text).toContain('trashed-test');
+  expect(backup.text).toContain(receipt.body.id);
+  expect((await api.request(endpoint, "POST", { action: "mark-real", reason: "กู้คืนผิดทาง" })).response.status).toBe(400);
+  expect((await api.request(endpoint, "POST", { action: "restore-test", reason: "กู้คืน" })).body.recordStatus).toBe("test");
+  expect((await api.request("/api/export")).text).not.toContain(trial.body.id);
+  expect((await api.request(endpoint, "POST", { action: "mark-real", reason: "เปลี่ยนเป็นข้อมูลจริง" })).response.status).toBe(200);
+  expect((await api.request("/api/export")).text).toContain(receipt.body.id);
+  const saved = await api.request("/api/data");
+  expect(saved.body.payments).toMatchObject([{ loanId: realClosed.body.id, canceledAt: null, principalCents: 400000, interestCents: 40000 }, { id: receipt.body.id, canceledAt: null, interestCents: 20000 }]);
+  expect(saved.text).toContain("loan.record-status");
+});
 it("records actual monthly rates without changing source or scaling percent, and schedules them on valid future boundaries", async () => {
   const api = await client();
   await api.request("/api/auth/setup", "POST", credentials);

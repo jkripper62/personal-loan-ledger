@@ -31,6 +31,7 @@ import {
 import { compareEvents } from "../src/domain/chronology.js";
 import { isLoanOverdue } from "../src/domain/status.js";
 import { loanDisplayName } from "../src/domain/loan-name.js";
+import { changeLoanRecordStatus, realLedgerData } from "../src/domain/loan-records.js";
 import { createLedgerCsv } from "./export.js";
 
 const hashPassword = (
@@ -254,7 +255,7 @@ export function createApp({
   }
   const getLoan = (data: LedgerData, id: unknown) =>
     required(
-      data.loans.find((l) => l.id === text(id, "รายการกู้", true)),
+      data.loans.find((l) => l.id === text(id, "รายการกู้", true) && l.recordStatus !== "trashed-test"),
       "รายการกู้",
     );
   const ledger = (data: LedgerData, loan: Loan, asOf = today()) =>
@@ -742,12 +743,15 @@ export function createApp({
         return json(response, 200, borrower);
       }
       if (path === "/api/loans" && method === "POST") {
+        if (body.isTest !== undefined && typeof body.isTest !== "boolean")
+          return fail(400, "ต้องระบุสถานะสัญญาทดลองให้ถูกต้อง");
         if (body.source !== "new" && body.source !== "existing")
           return fail(400, "ประเภทรายการกู้ไม่ถูกต้อง");
         const loan: Loan = {
           id: randomUUID(),
           borrowerId: text(body.borrowerId, "ผู้กู้", true),
           source: body.source,
+          ...(body.isTest === true ? { recordStatus: "test" } : {}),
           principalCents: integer(body.principalCents, "เงินต้น"),
           openingInterestCents: integer(
             body.openingInterestCents ?? 0,
@@ -794,6 +798,22 @@ export function createApp({
           audit(data, "loan.create", loan.id, loan.notes || "เพิ่มรายการกู้");
         });
         return json(response, 201, loan);
+      }
+      const recordStatus = path.match(/^\/api\/loans\/([^/]+)\/record-status$/);
+      if (recordStatus && method === "POST") {
+        const action = body.action;
+        if (action !== "mark-test" && action !== "mark-real" && action !== "trash-test" && action !== "restore-test")
+          return fail(400, "คำสั่งจัดหมวดสัญญาไม่ถูกต้อง");
+        const reason = text(body.reason, "เหตุผล", true);
+        const updated = mutate(data => {
+          const loan = required(data.loans.find(entry => entry.id === recordStatus[1]), "รายการกู้");
+          const before = loan.recordStatus ?? "real";
+          changeLoanRecordStatus(loan, action);
+          if (before !== (loan.recordStatus ?? "real"))
+            audit(data, "loan.record-status", loan.id, JSON.stringify({ action, reason, before, after: loan.recordStatus ?? "real" }));
+          return loan;
+        });
+        return json(response, 200, updated);
       }
       if (path.startsWith("/api/loans/") && method === "PATCH") {
         const loan = mutate((data) => {
@@ -1041,7 +1061,7 @@ export function createApp({
         return json(response, 201, contact);
       }
       if (path === "/api/reminders" && method === "GET") {
-        const data = getData(),
+        const data = realLedgerData(getData()),
           currentDate = today();
         const items = data.loans
           .filter(

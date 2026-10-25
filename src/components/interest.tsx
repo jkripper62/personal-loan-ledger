@@ -24,17 +24,21 @@ export function InterestOverview({ data, forecasts, select, today }: {
   const visiblePeople = people.filter(({ borrower, items }) =>
     `${borrower.name} ${borrower.nickname} ${items.map(({ loan }) => loan.purpose || "").join(" ")}`.includes(search.trim()),
   );
-  const totals = [...forecasts.values()].reduce((sum, item) => ({
+  const visibleForecasts = data.loans.flatMap(loan => {
+    const forecast = forecasts.get(loan.id);
+    return forecast ? [forecast] : [];
+  });
+  const totals = visibleForecasts.reduce((sum, item) => ({
     earned: sum.earned + item.month.earnedInterestCents,
     full: sum.full + (item.cycle.accruing ? item.cycle.fullInterestCents : 0),
     forecast: sum.forecast + item.month.forecastInterestCents,
     additional: sum.additional + item.month.additionalInterestCents,
   }), { earned: 0, full: 0, forecast: 0, additional: 0 });
-  const monthEnd = forecasts.values().next().value?.month.endDate;
+  const monthEnd = visibleForecasts[0]?.month.endDate;
   return <section className="panel interest-panel">
     <div className="panel-heading"><h2>ดอกแยกรายคน</h2><span className="interest-date">ณ {date(today)}</span></div>
     <div className="interest-people-tools">
-      <p>{people.length} คน · ดอกถึงวันนี้และคาดการณ์ถึง {monthEnd ? date(monthEnd) : "สิ้นเดือน"}</p>
+      <p>{people.length} คน · เฉพาะสัญญากำลังชำระ · คาดการณ์ถึง {monthEnd ? date(monthEnd) : "สิ้นเดือน"}</p>
       <input aria-label="ค้นหาผู้กู้ในดอกรายคน" placeholder="ค้นหาชื่อผู้กู้" value={search} onChange={(event) => setSearch(event.target.value)} />
     </div>
     <div className="interest-people">

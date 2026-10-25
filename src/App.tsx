@@ -44,6 +44,7 @@ import { calculateLedger, addMonths, todayBangkok } from "./domain/ledger";
 import { calculateInterestForecast } from "./domain/forecast";
 import { isLoanOverdue } from "./domain/status";
 import { loanDisplayName } from "./domain/loan-name";
+import { isRealLoan, loanCategory, realLedgerData, type LoanCategory } from "./domain/loan-records";
 import { InterestOverview, InterestDetail } from "./components/interest";
 import type {
   Borrower,
@@ -263,6 +264,7 @@ export default function App() {
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
+  const [category, setCategory] = useState<LoanCategory>("active");
   const [busy, setBusy] = useState(false);
   const today = todayBangkok();
   async function reload() {
@@ -322,7 +324,13 @@ export default function App() {
       ),
     [data, today],
   );
-  const totals = [...snapshots.values()].reduce(
+  const realData = useMemo(() => realLedgerData(data), [data]);
+  const realSnapshots = realData.loans.flatMap(loan => {
+    const snapshot = snapshots.get(loan.id);
+    return snapshot ? [snapshot] : [];
+  });
+  const activeData = { ...realData, loans: realData.loans.filter(loan => !snapshots.get(loan.id)?.closed) };
+  const totals = realSnapshots.reduce(
     (a, s) => ({
       principal: a.principal + s.principalCents,
       principalPaid: a.principalPaid + s.principalPaidCents,
@@ -342,17 +350,13 @@ export default function App() {
   const loans = data.loans.filter(
     (l) =>
       loanDisplayName(borrowerName(l.borrowerId), l).includes(search) &&
-      (filter === "all" ||
-        (filter === "closed"
-          ? snapshots.get(l.id)?.closed
-          : filter === "overdue"
-            ? isLoanOverdue(l, today) && !snapshots.get(l.id)?.closed
-            : !snapshots.get(l.id)?.closed)),
+      loanCategory(l, snapshots.get(l.id)) === category &&
+      (category !== "active" || filter !== "overdue" || isLoanOverdue(l, today)),
   );
-  const dueLoans = data.loans
+  const dueLoans = realData.loans
     .filter((l) => !snapshots.get(l.id)?.closed && (l.dueDate >= today || isLoanOverdue(l, today)))
     .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-  const selectedLoan = data.loans.find((l) => l.id === selected);
+  const selectedLoan = data.loans.find((l) => l.id === selected && l.recordStatus !== "trashed-test");
   const snapshot = selectedLoan ? snapshots.get(selectedLoan.id) : undefined;
   async function mutate(path: string, body: unknown, method = "POST") {
     await api(path, body, method);
@@ -508,7 +512,8 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <InterestOverview data={data} forecasts={forecasts} select={setSelected} today={today} />
+                <p className="portfolio-scope">ยอดบัญชีจริงรวมเงินที่รับจากสัญญาปิดแล้ว · ไม่รวมสัญญาทดลองและถังขยะ</p>
+                <InterestOverview data={activeData} forecasts={forecasts} select={setSelected} today={today} />
                 <div className="dashboard-grid">
                   <section className="panel contracts">
                     <div className="panel-heading">
@@ -522,18 +527,17 @@ export default function App() {
                             onChange={(e) => setSearch(e.target.value)}
                           />
                         </label>
-                        <select
+                        {category === "active" && <select
                           aria-label="กรองสัญญา"
                           value={filter}
                           onChange={(e) => setFilter(e.target.value)}
                         >
-                          <option value="all">ทั้งหมด</option>
-                          <option value="active">กำลังชำระ</option>
+                          <option value="all">ทุกสัญญาในหมวด</option>
                           <option value="overdue">เกินกำหนด</option>
-                          <option value="closed">ปิดแล้ว</option>
-                        </select>
+                        </select>}
                       </div>
                     </div>
+                    <LoanCategories data={data} snapshots={snapshots} value={category} onChange={setCategory} />
                     <LoanTable
                       loans={loans}
                       snapshots={snapshots}
@@ -541,12 +545,13 @@ export default function App() {
                       busy={busy}
                       name={borrowerName}
                       select={setSelected}
+                      open={setModal}
                     />
                     {!loans.length && (
                       <Empty
                         title={
                           data.loans.length
-                            ? "ไม่พบสัญญาที่ค้นหา"
+                            ? "ยังไม่มีสัญญาในหมวดนี้"
                             : "เริ่มบันทึกสัญญาแรกของคุณ"
                         }
                         text="เพิ่มสัญญาเพื่อเริ่มติดตามเงินต้น ดอกเบี้ย และการชำระได้ทันที"
@@ -641,7 +646,8 @@ export default function App() {
                   </Empty>
                 ) : (
                   <div className="borrower-list">
-                    {data.borrowers.map((b) => (
+                    <LoanCategories data={data} snapshots={snapshots} value={category} onChange={setCategory} />
+                    {data.borrowers.filter(b => !data.loans.some(l => l.borrowerId === b.id) || data.loans.some(l => l.borrowerId === b.id && loanCategory(l, snapshots.get(l.id)) === category)).map((b) => (
                       <article key={b.id}>
                         <div className="borrower-heading">
                           <span className="avatar">{b.name.slice(0, 1)}</span>
@@ -670,9 +676,10 @@ export default function App() {
                         </div>
                         <LoanTable
                           loans={data.loans.filter(
-                            (l) => l.borrowerId === b.id,
+                            (l) => l.borrowerId === b.id && loanCategory(l, snapshots.get(l.id)) === category,
                           )}
                           snapshots={snapshots}
+                          open={setModal}
                           setStatus={setLoanStatus}
                           busy={busy}
                           name={borrowerName}
@@ -701,7 +708,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {data.payments
+                      {realData.payments
                         .toSorted((a, b) => b.date.localeCompare(a.date))
                         .map((p) => {
                           const loan = data.loans.find(
@@ -736,7 +743,7 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-                {!data.payments.length && (
+                {!realData.payments.length && (
                   <Empty
                     title="ยังไม่มีประวัติรับชำระ"
                     text="เปิดสัญญาเพื่อบันทึกเงินที่ได้รับ"
@@ -839,6 +846,16 @@ export default function App() {
                 await reload();
               }
               setModal(undefined);
+              if (modal.kind === "loan") {
+                setSelected(undefined);
+                setPage("overview");
+                setCategory(body && typeof body === "object" && "isTest" in body && body.isTest === true ? "test" : "active");
+              }
+              if (modal.kind === "loan-record") {
+                setSelected(undefined);
+                setPage("overview");
+                setCategory(modal.action === "mark-real" ? (snapshots.get(modal.loan.id)?.closed ? "closed" : "active") : "test");
+              }
             } catch (e) {
               throw e;
             } finally {
@@ -862,6 +879,26 @@ export default function App() {
   );
 }
 
+const loanCategories: Array<{ id: LoanCategory; label: string }> = [
+  { id: "active", label: "กำลังชำระ" },
+  { id: "closed", label: "ปิดแล้ว" },
+  { id: "test", label: "ทดลอง" },
+  { id: "trashed-test", label: "ถังขยะทดลอง" },
+];
+function LoanCategories({ data, snapshots, value, onChange }: {
+  data: LedgerData;
+  snapshots: Map<string, LedgerSnapshot>;
+  value: LoanCategory;
+  onChange: (category: LoanCategory) => void;
+}) {
+  return <div className="loan-categories" role="group" aria-label="หมวดสัญญา">
+    {loanCategories.map(item => <button key={item.id} type="button" aria-pressed={value === item.id}
+      className={value === item.id ? "selected" : ""} onClick={() => onChange(item.id)}>
+      {item.label} ({data.loans.filter(loan => loanCategory(loan, snapshots.get(loan.id)) === item.id).length})
+    </button>)}
+    {(value === "test" || value === "trashed-test") && <p>ข้อมูลในหมวดนี้ไม่นับรวมในยอดเงินจริง ดอกคาดการณ์ และรายการเตือน</p>}
+  </div>;
+}
 function LoanTable({
   loans,
   snapshots,
@@ -869,6 +906,7 @@ function LoanTable({
   select,
   setStatus,
   busy,
+  open,
 }: {
   loans: Loan[];
   snapshots: Map<string, LedgerSnapshot>;
@@ -876,6 +914,7 @@ function LoanTable({
   select: (id: string) => void;
   setStatus: (loan: Loan) => void;
   busy: boolean;
+  open: (modal: Modal) => void;
 }) {
   return (
     <div className="table-scroll">
@@ -892,9 +931,9 @@ function LoanTable({
           {loans.map((l) => {
             const s = snapshots.get(l.id);
             return (
-              <tr key={l.id} onClick={() => select(l.id)}>
+              <tr key={l.id} onClick={() => { if (l.recordStatus !== "trashed-test") select(l.id); }}>
                 <td>
-                  <button className="table-name" onClick={() => select(l.id)}>
+                  <button className="table-name" disabled={l.recordStatus === "trashed-test"} onClick={() => select(l.id)}>
                     {loanDisplayName(name(l.borrowerId), l)}
                   </button>
                   <small>
@@ -909,13 +948,17 @@ function LoanTable({
                   <span
                     className={`badge ${!s?.closed && isLoanOverdue(l, todayBangkok()) ? "late" : ""}`}
                   >
-                    {s?.closed
+                    {l.recordStatus === "trashed-test" ? "ลบแล้ว · ทดลอง" : l.recordStatus === "test" ? "ทดลอง · ไม่รวมยอด" : s?.closed
                       ? "ปิดแล้ว"
                       : isLoanOverdue(l, todayBangkok())
                         ? "เกินกำหนด"
                         : "ปกติ"}
                   </span>
-                  {!s?.closed && (isLoanOverdue(l, todayBangkok()) || l.statusOverride === "normal") && <button
+                  {l.recordStatus && <button className="text-button status-toggle" disabled={busy}
+                    onClick={event => { event.stopPropagation(); open({ kind: "loan-record", loan: l, action: l.recordStatus === "trashed-test" ? "restore-test" : "trash-test" }); }}>
+                    {l.recordStatus === "trashed-test" ? "กู้คืนสัญญาทดลอง" : "ลบสัญญาทดลอง"}
+                  </button>}
+                  {isRealLoan(l) && !s?.closed && (isLoanOverdue(l, todayBangkok()) || l.statusOverride === "normal") && <button
                     className="text-button status-toggle" disabled={busy}
                     aria-label={`${l.statusOverride === "normal" ? "ใช้สถานะตามวันนัด" : "ตั้งสถานะปกติ"} ${loanDisplayName(name(l.borrowerId), l)} ต้นเริ่ม ${money(l.principalCents)}`}
                     onClick={(event) => { event.stopPropagation(); setStatus(l); }}>
@@ -1049,7 +1092,12 @@ function LoanDetail({
             </p>
           )}
           {loan.notes && <p className="panel-note">{loan.notes}</p>}
+          {loan.recordStatus === "test" && <p className="panel-note">สัญญาทดลอง · ยอดของสัญญานี้และประวัติรับชำระไม่นับรวมในบัญชีจริง</p>}
           <div className="actions-wrap">
+            <Button secondary onClick={() => open({ kind: "loan-record", loan, action: isRealLoan(loan) ? "mark-test" : "mark-real" })}>
+              {isRealLoan(loan) ? "ย้ายเป็นสัญญาทดลอง" : "เปลี่ยนเป็นสัญญาจริง"}
+            </Button>
+            {loan.recordStatus === "test" && <Button secondary onClick={() => open({ kind: "loan-record", loan, action: "trash-test" })}>ลบสัญญาทดลอง</Button>}
             {!s.closed && (
               <>
                 <Button onClick={() => open({ kind: "payment", loan })}>

@@ -65,6 +65,11 @@
   .interest-person-metrics strong { font-size: 24px; }
 }
 .modal-loan-context { display: block; margin-top: 7px; font-size: 12px; line-height: 1.7; }
+.portfolio-scope { margin: -8px 0 20px; color: #596678; font-size: 12px; line-height: 1.8; }
+.loan-categories { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 20px 18px; }
+.loan-categories button { border: 1px solid #dce8e0; background: #fff; color: #426354; border-radius: 8px; padding: 9px 13px; font-size: 13px; }
+.loan-categories button.selected { background: #07513f; color: #fff; border-color: #07513f; }
+.loan-categories p { flex-basis: 100%; font-size: 12px; line-height: 1.8; color: #596678; }
 .payment-interest-context { background: #eef6f1; border: 1px solid #dce8e0; border-radius: 9px; padding: 16px; }
 .payment-interest-context p { font-size: 14px; color: #426354; }
 .payment-interest-context strong { display: block; margin: 8px 0; font-size: 27px; color: #07513f; }

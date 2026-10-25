@@ -2,6 +2,7 @@ import type { LedgerData } from "../src/domain/types.js";
 import { calculateLedger } from "../src/domain/ledger.js";
 import { compareEvents } from "../src/domain/chronology.js";
 import { loanDisplayName } from "../src/domain/loan-name.js";
+import { realLedgerData } from "../src/domain/loan-records.js";
 
 const money = (value: number) => (value / 100).toFixed(2);
 function csvCell(value: string): string {
@@ -9,7 +10,8 @@ function csvCell(value: string): string {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
-export function createLedgerCsv(data: LedgerData, asOf: string): string {
+export function createLedgerCsv(allData: LedgerData, asOf: string): string {
+  const data = realLedgerData(allData);
   const names = new Map(
     data.borrowers.map((borrower) => [borrower.id, borrower.name]),
   );

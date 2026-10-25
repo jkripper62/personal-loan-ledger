@@ -2,6 +2,13 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Copy, Check, X } from "lucide-react";
 import { calculateLedger, addMonths, todayBangkok } from "../domain/ledger";
 import { loanDisplayName } from "../domain/loan-name";
+import type { LoanRecordAction } from "../domain/loan-records";
+const recordActionTitles: Record<LoanRecordAction, string> = {
+  "mark-test": "ย้ายเป็นสัญญาทดลอง",
+  "mark-real": "เปลี่ยนเป็นสัญญาจริง",
+  "trash-test": "ลบสัญญาทดลอง",
+  "restore-test": "กู้คืนสัญญาทดลอง",
+};
 import type {
   Borrower,
   Loan,
@@ -24,6 +31,7 @@ function MonthlyRateInput({ label, value, onChange }: {
   </label>;
 }
 export type Modal =
+  | { kind: "loan-record"; loan: Loan; action: LoanRecordAction }
   | { kind: "borrower"; borrower?: Borrower }
   | { kind: "loan"; borrowerId?: string }
   | { kind: "edit-payment"; loan: Loan; payment: Payment }
@@ -97,6 +105,7 @@ export function ModalView({
       : "",
   );
   const titles = {
+    "loan-record": modal.kind === "loan-record" ? recordActionTitles[modal.action] : "จัดหมวดสัญญา",
     borrower:
       "borrower" in modal && modal.borrower
         ? "แก้ไขข้อมูลผู้กู้"
@@ -141,6 +150,7 @@ export function ModalView({
         await submit("/loans", {
           borrowerId: field(f, "borrowerId"),
           source,
+          isTest: f.get("isTest") === "on",
           principalCents: cents(f, "principal"),
           openingInterestCents:
             source === "existing" ? cents(f, "openingInterest") : 0,
@@ -210,6 +220,8 @@ export function ModalView({
           },
           "POST",
         );
+      else if (modal.kind === "loan-record")
+        await submit(`/loans/${modal.loan.id}/record-status`, { action: modal.action, reason: field(f, "reason") });
       else if (modal.kind === "loan-purpose")
         await submit(`/loans/${modal.loan.id}`, { purpose: field(f, "purpose"), reason: "เจ้าของตั้งชื่อรายการกู้" }, "PATCH");
       else if (modal.kind === "cancel")
@@ -373,6 +385,10 @@ export function ModalView({
                       หนี้เดิมยกมา
                     </button>
                   </div>
+                  <label className="payment-date-unknown">
+                    <input type="checkbox" name="isTest" />
+                    สัญญาทดลอง · ไม่นับต้น ดอก เงินรับ หรือยอดคาดการณ์ในบัญชีจริง
+                  </label>
                   <div className="form-grid">
                     <Input
                       label={
@@ -624,6 +640,16 @@ export function ModalView({
                   <p className="panel-note">เปลี่ยนวันนัดชำระได้ แต่รอบตัดดอกยังเดิม รายการที่ตั้งอัตราล่วงหน้าไว้จะยังใช้ตามเดิมหากไม่ได้เลือกยกเลิก</p>
                 </>
               )}
+              {modal.kind === "loan-record" && <>
+                <p className="panel-note">
+                  {modal.action === "mark-real"
+                    ? "สัญญานี้และประวัติรับชำระทั้งหมดจะกลับมานับในยอดบัญชีจริง"
+                    : modal.action === "trash-test"
+                      ? "ย้ายสัญญาทดลองพร้อมประวัติไปถังขยะ ไม่นับในยอดบัญชีจริง และกู้คืนเป็นสัญญาทดลองได้"
+                      : "สัญญานี้และประวัติรับชำระทั้งหมดเป็นข้อมูลทดลอง ไม่นับต้น ดอก เงินรับ ยอดคาดการณ์ หรือรายการเตือนในบัญชีจริง"}
+                </p>
+                <Input label="เหตุผล *" name="reason" required value={modal.action === "mark-test" ? "เจ้าของระบุว่าเป็นข้อมูลทดลอง" : modal.action === "trash-test" ? "ลบสัญญาที่ใช้ทดลอง" : "เจ้าของเปลี่ยนหมวดสัญญา"} />
+              </>}
               {modal.kind === "loan-purpose" && (
                 <>
                   <label className="field">ชื่อรายการ / กู้ไปเพื่ออะไร
@@ -751,6 +777,8 @@ export function ModalView({
                   ? "กำลังบันทึก…"
                   : modal.kind === "contact"
                     ? "ส่งแล้ว บันทึกประวัติ"
+                    : modal.kind === "loan-record"
+                      ? recordActionTitles[modal.action]
                     : modal.kind === "payoff"
                       ? "ยืนยันรับเงินปิดหนี้"
                     : modal.kind === "edit-payment"
