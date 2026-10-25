@@ -79,7 +79,7 @@ export function ModalView({
       .filter(day => !futureRates.some(r => r.effectiveDate === day)) : [];
   const [message, setMessage] = useState(
     loan
-      ? `สวัสดี ${loanDisplayName(borrower?.nickname || borrower?.name || "ผู้กู้", loan)} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} ดอกค้าง ${money(snapshots.get(loan.id)?.interestCents || 0)} บาท เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
+      ? `สวัสดี ${loanDisplayName(borrower?.nickname || borrower?.name || "ผู้กู้", loan)} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
       : "",
   );
   const titles = {
@@ -90,7 +90,7 @@ export function ModalView({
     loan: "เพิ่มสัญญาเงินกู้",
     payment: "บันทึกรับชำระ",
     "edit-payment": "แก้ไขรับชำระ",
-    payoff: "ปิดหนี้ตามวัน",
+    payoff: "คำนวณปิดหนี้ตามสูตร",
     rate: "เปลี่ยนอัตรางวดถัดไป",
     adjustment: "เพิ่ม/ลดยอด (ขั้นสูง)",
     "loan-correction": "แก้ต้น / ดอก / วันนัด",
@@ -421,7 +421,7 @@ export function ModalView({
                     {source === "existing" && (
                       <>
                         <Input
-                          label="ดอกค้างถึงวันเริ่มนับยอด (บาท) *"
+                          label="ดอกยกมาที่คุณระบุเอง (บาท) *"
                           name="openingInterest"
                           type="number"
                           step="0.01"
@@ -475,8 +475,9 @@ export function ModalView({
                         จำวันที่จ่ายจริงไม่ได้ ใช้วันที่บันทึกและระบุไว้ในประวัติ
                       </label>
                       <div className="payment-interest-context" role="status">
-                        <p>ดอกตามสูตร ณ วันที่เลือก สำหรับอ้างอิง</p>
-                        <strong>฿{money(s?.payoffInterestCents || 0)}</strong>
+                        <p>ดอกตามสูตรในรอบที่เลือก สำหรับอ้างอิง</p>
+                        <strong>฿{money(s?.cycleInterest.earnedInterestCents || 0)}</strong>
+                        <small>เป็นดอกของรอบนี้ตามสูตร ไม่ใช่ยอดที่บังคับเรียกเก็บ</small>
                         <small>คุณระบุยอดดอกที่รับจริงเองได้ ไม่จำกัดตามยอดคำนวณ · ไม่มีค่าปรับอัตโนมัติ</small>
                         <small>ส่วนที่รับเกินยอดสูตรเป็นดอกรับตามตกลง ไม่เป็นเครดิตหักดอกล่วงหน้า</small>
                       </div>
@@ -524,7 +525,7 @@ export function ModalView({
                         ยอดรับปิดหนี้ ฿{money(s?.payoffTotalCents || 0)}
                       </strong>
                       <small>
-                        คิดตามวันจริงในรอบ นับวันเริ่ม ไม่นับวันชำระ
+                        นี่เป็นยอดตามสูตร ใช้เมื่อยอดตรงกับที่คุณตกลงเรียกเก็บเท่านั้น หากรับดอกต่างจากสูตร ให้เลือก “รับชำระ” แล้วกรอกยอดจริงเอง
                       </small>
                     </div>
                   )}
@@ -690,6 +691,7 @@ export function ModalView({
                       required
                     />
                   </label>
+                  <p className="panel-note">หากต้องการแจ้งยอดดอก ให้พิมพ์ยอดที่คุณตกลงเรียกเก็บในข้อความเอง</p>
                   <div className="actions-wrap">
                     <Button
                       secondary

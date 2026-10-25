@@ -355,6 +355,7 @@ it("exports individually dated payments including canceled allocations alongside
   });
   const csv = await api.request("/api/export");
   expect(csv.text).toContain("สรุปยอด");
+  expect(csv.text).not.toContain("ดอกค้าง (บาท)");
   expect(csv.text).toContain("ยอดรับคืนก่อนหน้านั้นยังไม่ทราบ");
   expect(csv.text).toContain(payment.body.id);
   expect(csv.text).toContain("2026-09-25");

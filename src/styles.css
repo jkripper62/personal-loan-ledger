@@ -76,3 +76,8 @@
 .status-toggle { display: block; margin-top: 7px; font-size: 12px; white-space: nowrap; }
 .header > div:first-child { min-width: 0; }
 .header h1, .payment-interest-context strong { overflow-wrap: anywhere; }
+.summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 650px) {
+  .summary { grid-template-columns: 1fr; }
+  .summary .stat { border-right: 0; padding: 0; }
+}

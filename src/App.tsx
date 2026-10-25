@@ -15,7 +15,6 @@ import {
   Plus,
   Search,
   History,
-  Percent,
   ChartNoAxesColumnIncreasing,
   MessageSquare,
   Info,
@@ -326,11 +325,10 @@ export default function App() {
   const totals = [...snapshots.values()].reduce(
     (a, s) => ({
       principal: a.principal + s.principalCents,
-      interest: a.interest + s.interestCents,
       principalPaid: a.principalPaid + s.principalPaidCents,
       interestPaid: a.interestPaid + s.interestPaidCents,
     }),
-    { principal: 0, interest: 0, principalPaid: 0, interestPaid: 0 },
+    { principal: 0, principalPaid: 0, interestPaid: 0 },
   );
   const forecasts = useMemo(
     () => new Map(data.loans.map((loan) => [loan.id, calculateInterestForecast({
@@ -485,11 +483,6 @@ export default function App() {
                       label: "รับคืนต้นแล้ว",
                       value: totals.principalPaid,
                       icon: History,
-                    },
-                    {
-                      label: "ดอกเบี้ยคงค้าง",
-                      value: totals.interest,
-                      icon: Percent,
                     },
                     {
                       label: "รับดอกเบี้ยแล้ว",
@@ -785,8 +778,7 @@ export default function App() {
                         <div>
                           <h3>{loanDisplayName(borrowerName(l.borrowerId), l)}</h3>
                           <p>
-                            นัดชำระ {date(l.dueDate)} · ดอกค้าง ฿
-                            {money(snapshots.get(l.id)?.interestCents || 0)}
+                            นัดชำระ {date(l.dueDate)}
                           </p>
                         </div>
                         <Button secondary onClick={() => setSelected(l.id)}>
@@ -892,7 +884,6 @@ function LoanTable({
           <tr>
             <th>ผู้กู้</th>
             <th>เงินต้นคงเหลือ</th>
-            <th>ดอกเบี้ยคงค้าง</th>
             <th>ครบกำหนด</th>
             <th>สถานะ</th>
           </tr>
@@ -913,7 +904,6 @@ function LoanTable({
                   </small>
                 </td>
                 <td>฿{money(s?.principalCents || 0)}</td>
-                <td>฿{money(s?.interestCents || 0)}</td>
                 <td>{date(l.dueDate)}</td>
                 <td>
                   <span
@@ -985,13 +975,14 @@ function LoanDetail({
               <strong>฿{money(s.principalCents)}</strong>
             </div>
             <div>
-              <p>ดอกเบี้ยคงค้าง</p>
-              <strong>฿{money(s.interestCents)}</strong>
+              <p>รับคืนต้นแล้ว</p>
+              <strong>฿{money(s.principalPaidCents)}</strong>
+              {loan.source === "existing" && <small>ตั้งแต่เริ่มบันทึก</small>}
             </div>
             <div>
-              <p>ยอดปิดหนี้ ณ วันนี้</p>
-              <strong>฿{money(s.payoffTotalCents)}</strong>
-              <small>รวมดอกระหว่างรอบ ฿{money(s.accruedInterestCents)}</small>
+              <p>รับดอกเบี้ยแล้ว</p>
+              <strong>฿{money(s.interestPaidCents)}</strong>
+              {loan.source === "existing" && <small>ตั้งแต่เริ่มบันทึก</small>}
             </div>
           </div>
           {forecast && <InterestDetail forecast={forecast} loan={loan} />}
@@ -1065,7 +1056,7 @@ function LoanDetail({
                   secondary
                   onClick={() => open({ kind: "payoff", loan })}
                 >
-                  ปิดหนี้ตามวัน
+                  ปิดหนี้ตามสูตร
                 </Button>
                 <Button secondary onClick={() => open({ kind: "loan-correction", loan })}>
                   แก้ต้น / ดอก / วันนัด

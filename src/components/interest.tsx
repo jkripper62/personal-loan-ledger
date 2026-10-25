@@ -105,7 +105,7 @@ export function InterestDetail({ forecast, loan }: { forecast: InterestForecast;
       <div className="interest-projection"><p>คาดการณ์ดอกเดือนนี้</p><strong>฿{money(month.forecastInterestCents)}</strong><small>รวมถึง {date(month.endDate)}</small></div>
     </div>
     <p className="interest-formula">ดอกเต็มรอบ ฿{money(cycle.fullInterestCents)} ÷ {cycle.fullDays} วัน × {cycle.elapsedDays} วันที่ผ่าน</p>
-    <p className="interest-note">เริ่มนับ {date(cycle.chargeStartDate)} ไม่นับวันที่ {date(cycle.accrualEndDate)}{!cycle.accruing && " (หยุดคิดดอกแล้ว)"} ปัดยอดสุดท้ายเป็นสตางค์ · ดอกที่เกิดขึ้นรวมส่วนที่จ่ายแล้ว ส่วนยอดปิดหนี้หักส่วนที่จ่ายแล้ว</p>
+    <p className="interest-note">เริ่มนับ {date(cycle.chargeStartDate)} ไม่นับวันที่ {date(cycle.accrualEndDate)}{!cycle.accruing && " (หยุดคิดดอกแล้ว)"} ปัดยอดสุดท้ายเป็นสตางค์ · ตัวเลขดอกเป็นข้อมูลอ้างอิง คุณกำหนดยอดที่เรียกเก็บเอง</p>
     {loan.startDate > loan.cycleStartDate && cycle.chargeStartDate === loan.startDate && <p className="interest-note">รอบแรกของหนี้ยกมานับเฉพาะวันที่เหลือจากวันเริ่มบันทึก ดอกครบงวดจึงอาจน้อยกว่าดอกเต็มรอบ</p>}
     <p className="interest-note">คาดการณ์โดยไม่มีรับคืนต้นหรือปรับยอดเพิ่ม รวมอัตราใหม่ที่ตั้งไว้แล้ว หากคืนต้นบางส่วน ดอกรอบนี้ยังใช้ฐานต้นต้นรอบ และลดลงในรอบถัดไป</p>
   </section>;
