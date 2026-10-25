@@ -111,7 +111,8 @@ export function calculateLedger({
     rate = loan.rateBps,
     principalPaid = 0,
     interestPaid = 0,
-    manualInterestDifference = 0;
+    manualInterestDifference = 0,
+    uncollectedInterest = 0;
   const periods: InterestPeriod[] = [];
   let finalized = false;
   let accrualEnd = asOf;
@@ -197,13 +198,17 @@ export function calculateLedger({
     }
     principal -= p.principalCents;
     let appliedInterest = p.interestCents;
-    if (p.interestMode === "owner" && !p.isPayoff) {
+    if (p.interestMode === "owner") {
       const accruedAtReceipt = finalized ? 0
         : interest(base, rate, daysBetween(start, p.date), daysBetween(fullStart, end));
       appliedInterest = Math.min(p.interestCents, Math.max(0, dueInterest + accruedAtReceipt));
       manualInterestDifference += p.interestCents - appliedInterest;
     }
     dueInterest -= appliedInterest;
+    if (p.isPayoff && p.interestMode === "owner") {
+      uncollectedInterest += Math.max(0, dueInterest);
+      dueInterest = 0;
+    }
     principalPaid += p.principalCents;
     interestPaid += p.interestCents;
     if (p.date === start) base = principal;
@@ -237,6 +242,7 @@ export function calculateLedger({
     principalPaid,
     interestPaid,
     manualInterestDifference,
+    uncollectedInterest,
     earnedInterest,
     cycleForecast,
     principal + arrears + payableAccrued,
@@ -254,6 +260,7 @@ export function calculateLedger({
     principalPaidCents: principalPaid,
     interestPaidCents: interestPaid,
     manualInterestDifferenceCents: manualInterestDifference,
+    uncollectedInterestCents: uncollectedInterest,
     currentRateBps: rate,
     currentCycleStartDate: fullStart,
     currentCycleEndDate: end,
@@ -315,7 +322,7 @@ export function validatePayment(
   if (
     payment.isPayoff &&
     (payment.principalCents !== balance.principalCents ||
-      payment.interestCents !== balance.payoffInterestCents)
+      (payment.interestMode !== "owner" && payment.interestCents !== balance.payoffInterestCents))
   )
     throw new Error("ยอดปิดหนี้ต้องตรงกับต้นและดอกถึงวันรับชำระ");
 }

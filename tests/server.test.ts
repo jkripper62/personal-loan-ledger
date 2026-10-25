@@ -79,6 +79,33 @@ const credentials = {
   email: "owner@example.com",
   password: "long-private-password",
 };
+it("corrects a formula payoff to the actual owner receipt and retains closure without duplicating the old receipt", async () => {
+  const api = await client(undefined, undefined, () => new Date("2026-10-25T03:00:00Z"));
+  await api.request("/api/auth/setup", "POST", credentials);
+  const person = await api.request("/api/borrowers", "POST", { name: "ทดสอบปิดหนี้กอฟ" });
+  const created = await api.request("/api/loans", "POST", { ...loanInput(person.body.id), principalCents: 400000,
+    startDate: "2026-10-10", cycleStartDate: "2026-09-25", firstCycleEndDate: "2026-10-25", anchorDay: 25, dueDate: "2026-10-25" });
+  const actual = { loanId: created.body.id, date: "2026-10-24", totalCents: 440000, principalCents: 400000,
+    interestCents: 40000, isPayoff: true, payoffMode: "owner", note: "รับจริง 4400" };
+  expect((await api.request("/api/payments", "POST", { ...actual, principalCents: 300000, totalCents: 340000 })).response.status).toBe(400);
+  expect((await api.request("/api/payments", "POST", { ...actual, payoffMode: "invalid" })).response.status).toBe(400);
+  expect((await api.request("/api/payments", "POST", { ...actual, payoffMode: "formula" })).response.status).toBe(400);
+  const original = await api.request("/api/payments", "POST", { ...actual, payoffMode: "formula", totalCents: 418667, interestCents: 18667 });
+  expect(original.response.status).toBe(201);
+  const corrected = await api.request(`/api/payments/${original.body.id}`, "PATCH", { ...actual, editReason: "ยืนยันต้น 4000 ดอก 400" });
+  expect(corrected.response.status).toBe(200);
+  expect(corrected.body).toMatchObject({ isPayoff: true, interestMode: "owner", interestCents: 40000, totalCents: 440000, replacesPaymentId: original.body.id });
+  const state = await api.request("/api/data");
+  expect(state.body.payments).toMatchObject([{ id: original.body.id, interestCents: 18667, cancelReason: "แก้ไขรายการ: ยืนยันต้น 4000 ดอก 400" },
+    { id: corrected.body.id, canceledAt: null, interestCents: 40000 }]);
+  const csv = await api.request("/api/export");
+  expect(csv.text).toContain('"4000.00","400.00","4400.00"');
+  expect((await api.request("/api/payments", "POST", actual)).response.status).toBe(400);
+  expect((await api.request(`/api/payments/${corrected.body.id}/cancel`, "POST", { reason: "ทดสอบยกเลิก" })).response.status).toBe(200);
+  const noInterest = await api.request("/api/payments", "POST", { ...actual, interestCents: 0, totalCents: 400000 });
+  expect(noInterest.response.status).toBe(201);
+  expect(noInterest.body.interestCents).toBe(0);
+});
 it("labels each loan separately while preserving the borrower, money history, export and audit", async () => {
   const api = await client();
   await api.request("/api/auth/setup", "POST", credentials);

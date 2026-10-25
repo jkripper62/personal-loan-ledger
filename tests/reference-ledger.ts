@@ -3,7 +3,7 @@ import type { Adjustment, Loan, Payment, RateChange, LedgerSnapshot } from "../s
 type Input = { loan: Loan; payments: Payment[]; adjustments: Adjustment[]; rateChanges: RateChange[]; asOf: string };
 type ReferenceBalance = Pick<LedgerSnapshot, "principalCents" | "interestCents" | "accruedInterestCents" |
   "payoffInterestCents" | "payoffTotalCents" | "totalCents" | "earnedInterestCents" | "principalPaidCents" |
-  "interestPaidCents" | "manualInterestDifferenceCents" | "closed">;
+  "interestPaidCents" | "manualInterestDifferenceCents" | "uncollectedInterestCents" | "closed">;
 const day = (date: string) => Date.parse(`${date}T00:00:00Z`) / 86400000;
 const nextBoundary = (date: string, anchor: number) => {
   const value = new Date(`${date}T00:00:00Z`);
@@ -33,7 +33,7 @@ export function referenceLedger(input: Input, memo = new Map<string, ReferenceBa
   const cached = memo.get(key);
   if (cached) return cached;
   let principal = loan.principalCents, paidPrincipal = 0, paidInterest = 0;
-  let appliedInterest = 0;
+  let appliedInterest = 0, uncollectedInterest = 0;
   let interestAdjustment = 0, stopped: string | undefined;
   for (const [index, event] of events.entries()) {
     if (event.kind === "adjustment") {
@@ -41,13 +41,14 @@ export function referenceLedger(input: Input, memo = new Map<string, ReferenceBa
       interestAdjustment += event.value.interestDeltaCents;
     } else {
       let applied = event.value.interestCents;
-      if (event.value.interestMode === "owner" && !event.value.isPayoff) {
+      if (event.value.interestMode === "owner") {
         const prior = events.slice(0, index);
         const available = referenceLedger({ ...input, asOf: event.value.date,
           payments: prior.filter(item => item.kind === "payment").map(item => item.value),
           adjustments: prior.filter(item => item.kind === "adjustment").map(item => item.value),
         }, memo).payoffInterestCents;
         applied = Math.min(applied, available);
+        if (event.value.isPayoff) uncollectedInterest += available - applied;
       }
       appliedInterest += applied;
       if (!stopped && (event.value.isPayoff || event.value.principalCents === principal)) stopped = event.value.date;
@@ -73,7 +74,7 @@ export function referenceLedger(input: Input, memo = new Map<string, ReferenceBa
     calendarStart = calendarEnd;
     calendarEnd = nextBoundary(calendarEnd, loan.anchorDay);
   }
-  const due = loan.openingInterestCents + interestAdjustment + posted - appliedInterest;
+  const due = loan.openingInterestCents + interestAdjustment + posted - appliedInterest - uncollectedInterest;
   const arrears = Math.max(0, due), payableAccrued = Math.max(0, accrued + Math.min(0, due));
   const result = {
     principalCents: principal, interestCents: arrears, accruedInterestCents: payableAccrued,
@@ -83,6 +84,7 @@ export function referenceLedger(input: Input, memo = new Map<string, ReferenceBa
     earnedInterestCents: posted + accrued,
     principalPaidCents: paidPrincipal, interestPaidCents: paidInterest,
     manualInterestDifferenceCents: paidInterest - appliedInterest,
+    uncollectedInterestCents: uncollectedInterest,
     closed: principal === 0 && due + accrued === 0,
   };
   memo.set(key, result);

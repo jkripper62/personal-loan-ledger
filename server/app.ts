@@ -232,6 +232,8 @@ export function createApp({
   function readPayment(body: Record<string, unknown>, fixedLoanId?: string): Payment {
     if (typeof body.isPayoff !== "boolean")
       return fail(400, "ต้องระบุว่าปิดหนี้หรือรับชำระทั่วไป");
+    if (body.payoffMode !== undefined && (body.isPayoff !== true || (body.payoffMode !== "owner" && body.payoffMode !== "formula")))
+      return fail(400, "วิธีบันทึกปิดหนี้ไม่ถูกต้อง");
     if (body.dateEstimated !== undefined && typeof body.dateEstimated !== "boolean")
       return fail(400, "ต้องระบุสถานะวันที่รับชำระให้ถูกต้อง");
     if (fixedLoanId && body.loanId !== undefined && text(body.loanId, "รายการกู้", true) !== fixedLoanId)
@@ -244,7 +246,7 @@ export function createApp({
       principalCents: integer(body.principalCents, "คืนต้น"),
       interestCents: integer(body.interestCents, "ดอก"), note: text(body.note, "หมายเหตุ"),
       isPayoff: body.isPayoff,
-      interestMode: body.isPayoff ? undefined : "owner",
+      interestMode: body.isPayoff && body.payoffMode !== "owner" ? undefined : "owner",
       createdAt: now(), canceledAt: null, cancelReason: null,
     };
     if (payment.date > today()) return fail(400, "ไม่สามารถรับชำระล่วงหน้าได้");

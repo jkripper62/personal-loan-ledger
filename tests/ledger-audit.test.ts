@@ -39,7 +39,7 @@ it("matches an independent interval oracle across 180 dated repayment, adjustmen
         id: `payment-${payments.length}`, loanId: loan.id, date,
         totalCents: principalCents + interestCents, principalCents, interestCents,
         note: "audit", isPayoff, createdAt: `${date}T12:00:00Z`,
-        interestMode: scenario % 3 === 0 && !isPayoff ? "owner" : undefined,
+        interestMode: scenario % 3 === 0 ? "owner" : undefined,
         canceledAt: canceled ? `${date}T13:00:00Z` : null, cancelReason: canceled ? "audit" : null,
       };
       if (!canceled) validatePayment({ ...input, payment });
@@ -58,7 +58,8 @@ it("matches an independent interval oracle across 180 dated repayment, adjustmen
     if (scenario % 5 === 0) receive(after(start, 25), 1000, 0, false, true);
     if (scenario % 4 === 0) {
       const date = after(start, 45), balance = referenceLedger({ ...input, asOf: date });
-      receive(date, balance.principalCents, balance.payoffInterestCents, true);
+      receive(date, balance.principalCents, scenario % 3 === 0
+        ? scenario % 8 === 0 ? 0 : balance.payoffInterestCents + 5432 : balance.payoffInterestCents, true);
     } else if (scenario % 4 === 1) {
       const date = after(start, 45), balance = referenceLedger({ ...input, asOf: date });
       receive(date, balance.principalCents, 0);

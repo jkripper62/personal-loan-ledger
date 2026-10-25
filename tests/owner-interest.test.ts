@@ -11,6 +11,25 @@ const receipt: Payment = { id: "payment", loanId: loan.id, date: "2026-10-13", t
   createdAt: "2026-10-15T00:00:00Z", canceledAt: null, cancelReason: null };
 const input = { loan, payments: [], adjustments: [], rateChanges: [] };
 
+it("records the owner's 4400 payoff as 4000 principal and 400 received interest, independently of the formula", () => {
+  const selectedLoan = { ...loan, principalCents: 400000, cycleStartDate: "2026-09-25", firstCycleEndDate: "2026-10-25", anchorDay: 25 };
+  const payment = { ...receipt, date: "2026-10-24", totalCents: 440000, principalCents: 400000, interestCents: 40000, isPayoff: true };
+  const selected = { ...input, loan: selectedLoan, payments: [payment], asOf: "2027-01-25" };
+  expect(() => validatePayment({ ...selected, payment })).not.toThrow();
+  expect(calculateLedger(selected)).toMatchObject({ principalCents: 0, closed: true, principalPaidCents: 400000,
+    interestPaidCents: 40000, earnedInterestCents: 18667, manualInterestDifferenceCents: 21333 });
+  expect(calculateLedger(selected)).toMatchObject(referenceLedger(selected));
+});
+
+it("closes with owner-agreed zero interest without recording the formula interest as cash received", () => {
+  const payment = { ...receipt, totalCents: loan.principalCents, principalCents: loan.principalCents, interestCents: 0, isPayoff: true };
+  const selected = { ...input, payments: [payment], asOf: "2027-01-13" };
+  expect(() => validatePayment({ ...input, payment })).not.toThrow();
+  expect(calculateLedger(selected)).toMatchObject({ closed: true, interestPaidCents: 0, payoffInterestCents: 0,
+    earnedInterestCents: 2000, uncollectedInterestCents: 2000 });
+  expect(calculateLedger(selected)).toMatchObject(referenceLedger(selected));
+});
+
 it("accepts the owner's actual interest above the formula without changing principal or prepaying the next cycle", () => {
   expect(() => validatePayment({ ...input, payment: receipt })).not.toThrow();
   expect(calculateLedger({ ...input, payments: [receipt], asOf: receipt.date })).toMatchObject({
@@ -52,5 +71,6 @@ it("allows a final principal return with owner interest and stops subsequent acc
 it("keeps allocation, principal and exact automated payoff checks", () => {
   expect(() => validatePayment({ ...input, payment: { ...receipt, totalCents: 19999 } })).toThrow("ยอดรับจริง");
   expect(() => validatePayment({ ...input, payment: { ...receipt, principalCents: 200001, totalCents: 220001 } })).toThrow("เกินเงินต้น");
-  expect(() => validatePayment({ ...input, payment: { ...receipt, principalCents: 200000, totalCents: 220000, isPayoff: true } })).toThrow("ยอดปิดหนี้");
+  expect(() => validatePayment({ ...input, payment: { ...receipt, interestMode: undefined, principalCents: 200000, totalCents: 220000, isPayoff: true } })).toThrow("ดอกเกิน");
+  expect(() => validatePayment({ ...input, payment: { ...receipt, principalCents: 100000, totalCents: 120000, isPayoff: true } })).toThrow("ยอดปิดหนี้");
 });

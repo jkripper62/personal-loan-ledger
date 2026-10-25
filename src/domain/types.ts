@@ -54,6 +54,7 @@ export interface LedgerSnapshot {
   payoffInterestCents: number; totalCents: number; payoffTotalCents: number;
   principalPaidCents: number; interestPaidCents: number;
   manualInterestDifferenceCents: number;
+  uncollectedInterestCents: number;
   currentRateBps: number; currentCycleStartDate: string; currentCycleEndDate: string;
   nextCycleInterestCents: number; periods: InterestPeriod[];
   earnedInterestCents: number;

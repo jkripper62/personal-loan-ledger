@@ -1026,6 +1026,10 @@ function LoanDetail({
               <dt>ดอกรับตามตกลงส่วนที่เกินยอดสูตร</dt>
               <dd>฿{money(s.manualInterestDifferenceCents)} · ไม่เป็นเครดิตงวดถัดไป</dd>
             </div>}
+            {s.uncollectedInterestCents > 0 && <div>
+              <dt>ดอกตามสูตรที่ไม่ได้เรียกเก็บตอนปิด</dt>
+              <dd>฿{money(s.uncollectedInterestCents)} · ไม่นับเป็นเงินรับจริง</dd>
+            </div>}
             {loan.source === "existing" && (
               <>
                 <div>
@@ -1056,7 +1060,7 @@ function LoanDetail({
                   secondary
                   onClick={() => open({ kind: "payoff", loan })}
                 >
-                  ปิดหนี้ตามสูตร
+                  ปิดหนี้
                 </Button>
                 <Button secondary onClick={() => open({ kind: "loan-correction", loan })}>
                   แก้ต้น / ดอก / วันนัด

@@ -73,6 +73,7 @@ export function ModalView({
   );
   const [remainingPrincipal, setRemainingPrincipal] = useState(() => loan ? String((snapshots.get(loan.id)?.principalCents ?? loan.principalCents) / 100) : "");
   const [purpose, setPurpose] = useState(loan?.purpose ?? "");
+  const [payoffInterest, setPayoffInterest] = useState("");
   const futureRates = loan ? data.rateChanges.filter(r => r.loanId === loan.id && !r.canceledAt && r.effectiveDate > todayBangkok()) : [];
   const availableRateDates = loan && s && modal.kind === "rate"
     ? Array.from({ length: 24 }, (_, index) => addMonths(s.currentCycleEndDate, index, loan.anchorDay))
@@ -90,7 +91,7 @@ export function ModalView({
     loan: "เพิ่มสัญญาเงินกู้",
     payment: "บันทึกรับชำระ",
     "edit-payment": "แก้ไขรับชำระ",
-    payoff: "คำนวณปิดหนี้ตามสูตร",
+    payoff: "บันทึกรับเงินปิดหนี้",
     rate: "เปลี่ยนอัตรางวดถัดไป",
     adjustment: "เพิ่ม/ลดยอด (ขั้นสูง)",
     "loan-correction": "แก้ต้น / ดอก / วันนัด",
@@ -146,7 +147,7 @@ export function ModalView({
         const submittedDate = dateEstimated && modal.kind !== "payoff" ? paymentDate : field(f, "date");
         const submittedBalance = calculateLedger({
           loan: modal.loan,
-          payments: data.payments,
+          payments: data.payments.filter(p => p.id !== editingPayment?.id),
           rateChanges: data.rateChanges,
           adjustments: data.adjustments,
           asOf: submittedDate,
@@ -157,18 +158,16 @@ export function ModalView({
           dateEstimated: modal.kind !== "payoff" && dateEstimated,
           totalCents:
             modal.kind === "payoff"
-              ? submittedBalance.payoffTotalCents
+              ? submittedBalance.principalCents + cents(f, "interest")
               : cents(f, "total"),
           principalCents:
             modal.kind === "payoff"
               ? submittedBalance.principalCents
               : cents(f, "principal"),
-          interestCents:
-            modal.kind === "payoff"
-              ? submittedBalance.payoffInterestCents
-              : cents(f, "interest"),
+          interestCents: cents(f, "interest"),
           note: field(f, "note"),
-          isPayoff: modal.kind === "payoff",
+          isPayoff: modal.kind === "payoff" || editingPayment?.isPayoff === true,
+          ...((modal.kind === "payoff" || editingPayment?.isPayoff) ? { payoffMode: "owner" } : {}),
           ...(editingPayment ? { editReason: field(f, "editReason") } : {}),
         }, editingPayment ? "PATCH" : "POST");
       } else if (modal.kind === "rate")
@@ -518,14 +517,15 @@ export function ModalView({
                   ) : (
                     <div className="payoff-preview">
                       <p>เงินต้น ฿{money(s?.principalCents || 0)}</p>
-                      <p>
-                        ดอกรวมถึงวันปิด ฿{money(s?.payoffInterestCents || 0)}
-                      </p>
+                      <label className="field">ดอกที่รับจริงตอนปิดหนี้ (บาท) *
+                        <input name="interest" type="number" min="0" step="0.01" required value={payoffInterest} onChange={e => setPayoffInterest(e.target.value)} />
+                        <small>กรอกยอดที่ได้รับจริง ไม่มีดอกให้กรอก 0 ระบบจะไม่เติมดอกจากสูตรแทนคุณ</small>
+                      </label>
                       <strong>
-                        ยอดรับปิดหนี้ ฿{money(s?.payoffTotalCents || 0)}
+                        {payoffInterest === "" ? "กรอกดอกที่รับจริงเพื่อดูยอดรวม" : `ยอดรับปิดหนี้ ฿${money((s?.principalCents || 0) + Math.round(Number(payoffInterest) * 100))}`}
                       </strong>
                       <small>
-                        นี่เป็นยอดตามสูตร ใช้เมื่อยอดตรงกับที่คุณตกลงเรียกเก็บเท่านั้น หากรับดอกต่างจากสูตร ให้เลือก “รับชำระ” แล้วกรอกยอดจริงเอง
+                        ปิดหนี้โดยใช้ดอกที่คุณระบุ ดอกตามสูตรที่ไม่ได้เรียกเก็บจะไม่ถูกนับเป็นเงินรับจริง
                       </small>
                     </div>
                   )}
@@ -749,7 +749,7 @@ export function ModalView({
               <Button
                 type="submit"
                 disabled={
-                  busy || (modal.kind === "loan" && !data.borrowers.length)
+                  busy || (modal.kind === "loan" && !data.borrowers.length) || (modal.kind === "payoff" && payoffInterest === "")
                 }
               >
                 {busy
