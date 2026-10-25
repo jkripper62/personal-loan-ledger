@@ -10,6 +10,19 @@ import type {
   Payment,
 } from "../domain/types";
 import { Button, Input, money, date, field, cents } from "./ui";
+function MonthlyRateInput({ label, value, onChange }: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return <label className="field">{label}
+    <input name="rate" type="number" min="0" step="0.01" required value={value} onChange={e => onChange(e.target.value)} />
+    <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
+    {Number(value) > 1.25 && <small>
+      บันทึกอัตราตามจริง การบันทึกไม่รับรองสิทธิเรียกเก็บดอก อัตราทั่วไปสำหรับบุคคลธรรมดาไม่เกิน 15% ต่อปี (เฉลี่ย 1.25% ต่อเดือน) · <a href="https://personal.prd.go.th/th/content/category/detail/id/1824/cid/1825/iid/296636" target="_blank" rel="noreferrer">ข้อมูลจากกรมประชาสัมพันธ์</a>
+    </small>}
+  </label>;
+}
 export type Modal =
   | { kind: "borrower"; borrower?: Borrower }
   | { kind: "loan"; borrowerId?: string }
@@ -69,7 +82,7 @@ export function ModalView({
       })
     : undefined;
   const [ratePercent, setRatePercent] = useState(() =>
-    loan ? String((modal.kind === "loan-correction" ? loan.rateBps : s?.currentRateBps ?? loan.rateBps) / 100) : "",
+    loan ? String((modal.kind === "loan-correction" ? loan.rateBps : s?.currentRateBps ?? loan.rateBps) / 100) : "0",
   );
   const [remainingPrincipal, setRemainingPrincipal] = useState(() => loan ? String((snapshots.get(loan.id)?.principalCents ?? loan.principalCents) / 100) : "");
   const [purpose, setPurpose] = useState(loan?.purpose ?? "");
@@ -373,20 +386,10 @@ export function ModalView({
                       min="0.01"
                       required
                     />
-                    <Input
+                    <MonthlyRateInput
                       label="ดอกเบี้ยต่อเดือน (%) *"
-                      name="rate"
-                      type="number"
-                      min="0"
-                      max={source === "new" ? "1.25" : undefined}
-                      step="0.01"
-                      value="0"
-                      hint={
-                        source === "new"
-                          ? "0% สำหรับยืมไม่มีดอก สูงสุดทั่วไป 1.25% ต่อเดือน"
-                          : "บันทึกอัตราตามหลักฐานหนี้เดิม"
-                      }
-                      required
+                      value={ratePercent}
+                      onChange={setRatePercent}
                     />
                     <Input
                       label={
@@ -539,12 +542,7 @@ export function ModalView({
               {modal.kind === "rate" && (
                 <>
                   <div className="form-grid">
-                    <label className="field">อัตราใหม่ต่อเดือน (%) *
-                      <input name="rate" type="number" min="0" max={modal.loan.source === "new" ? "1.25" : undefined}
-                        step="0.01" required value={ratePercent} onChange={e => setRatePercent(e.target.value)} />
-                      <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
-                      {modal.loan.source === "new" && <small>รายการประเภทกู้ใหม่ ตั้งอัตราสำหรับงวดใหม่ได้ไม่เกิน 1.25% ต่อเดือน</small>}
-                    </label>
+                    <MonthlyRateInput label="อัตราใหม่ต่อเดือน (%) *" value={ratePercent} onChange={setRatePercent} />
                     <label className="field">เริ่มใช้อัตราใหม่ในงวด *
                       <select name="effectiveDate" required defaultValue={availableRateDates[0]}>
                         {availableRateDates.map(day => <option key={day} value={day}>{date(day)}</option>)}
@@ -601,10 +599,7 @@ export function ModalView({
                   </label>
                   <p className="panel-note">ต้นคงเหลือปัจจุบัน ฿{money(snapshots.get(modal.loan.id)?.principalCents ?? modal.loan.principalCents)} → ยอดที่ต้องการ ฿{money(Math.round(Number(remainingPrincipal) * 100) || 0)}
                     <br />การแก้ต้นจะเก็บรายการปรับส่วนต่าง ณ วันนี้ ไม่บันทึกเป็นเงินรับชำระ</p>
-                  <label className="field">อัตราดอกที่ถูกต้องต่อเดือน (%) *
-                    <input name="rate" type="number" min="0" step="0.01" required value={ratePercent} onChange={e => setRatePercent(e.target.value)} />
-                    <small>10% ให้กรอก 10 · 7.5% ให้กรอก 7.5 · ไม่มีดอกกรอก 0</small>
-                  </label>
+                  <MonthlyRateInput label="อัตราดอกที่ถูกต้องต่อเดือน (%) *" value={ratePercent} onChange={setRatePercent} />
                   <div className="payment-interest-context" role="status">
                     <p>ตัวอย่างดอกเต็มเดือนจากต้นที่ระบุ ฿{money(Math.round(Number(remainingPrincipal) * 100) || 0)}</p>
                     <strong>{Number.isFinite(Number(ratePercent)) && Number(ratePercent) >= 0

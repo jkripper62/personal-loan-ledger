@@ -79,6 +79,37 @@ const credentials = {
   email: "owner@example.com",
   password: "long-private-password",
 };
+it("records actual monthly rates without changing source or scaling percent, and schedules them on valid future boundaries", async () => {
+  const api = await client();
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "ทดสอบอัตรารายเดือน" });
+  const expectedLoans = [];
+  for (const source of ["new", "existing"]) {
+    for (const rateBps of [0, 700, 750, 1000, 1500]) {
+      const created = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), source, rateBps });
+      expect(created.response.status).toBe(201);
+      expect(created.body).toMatchObject({ source, rateBps, principalCents: 1000000 });
+      expectedLoans.push({ id: created.body.id, source, rateBps });
+    }
+  }
+  const loanId = expectedLoans[0].id;
+  const expectedChanges = [];
+  for (const [effectiveDate, rateBps] of [["2026-10-15", 1000], ["2026-11-15", 750], ["2026-12-15", 0]]) {
+    const scheduled = await api.request("/api/rate-changes", "POST", { loanId, effectiveDate, rateBps, reason: "บันทึกอัตราตามจริง" });
+    expect(scheduled.response.status).toBe(201);
+    expectedChanges.push({ loanId, effectiveDate, rateBps });
+  }
+  for (const rateBps of [-1, 7.5, Number.MAX_SAFE_INTEGER + 1]) {
+    expect((await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), source: "new", rateBps })).response.status).toBe(400);
+    expect((await api.request("/api/rate-changes", "POST", { loanId, effectiveDate: "2027-01-15", rateBps, reason: "ผิด" })).response.status).toBe(400);
+  }
+  expect((await api.request("/api/rate-changes", "POST", { loanId, effectiveDate: "2027-01-14", rateBps: 1000, reason: "ไม่ตรงรอบ" })).response.status).toBe(400);
+  expect((await api.request("/api/rate-changes", "POST", { loanId, effectiveDate: "2026-09-15", rateBps: 1000, reason: "ย้อนหลัง" })).response.status).toBe(400);
+  expect((await api.request("/api/rate-changes", "POST", { loanId, effectiveDate: "2026-10-15", rateBps: 1000, reason: "ซ้ำ" })).response.status).toBe(400);
+  const saved = await api.request("/api/data");
+  expect(saved.body.loans).toMatchObject(expectedLoans);
+  expect(saved.body.rateChanges).toMatchObject(expectedChanges);
+});
 it("corrects a formula payoff to the actual owner receipt and retains closure without duplicating the old receipt", async () => {
   const api = await client(undefined, undefined, () => new Date("2026-10-25T03:00:00Z"));
   await api.request("/api/auth/setup", "POST", credentials);
@@ -524,7 +555,7 @@ it("enforces same-day payment totals and can cancel a payoff to resume the origi
       await api.request("/api/rate-changes", "POST", {
         loanId,
         effectiveDate: "2026-10-15",
-        rateBps: 126,
+        rateBps: -1,
         reason: "ใหม่",
       })
     ).response.status,
@@ -770,7 +801,7 @@ it("validates loan source and rates, records payoff and protects later history a
       .response.status,
   ).toBe(400);
   expect(
-    (await api.request("/api/loans", "POST", { ...loan, source: "new" }))
+    (await api.request("/api/loans", "POST", { ...loan, source: "new", openingInterestCents: 1 }))
       .response.status,
   ).toBe(400);
   expect(

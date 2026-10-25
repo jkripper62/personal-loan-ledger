@@ -777,13 +777,12 @@ export function createApp({
           return fail(400, "ยอดเงินหรือวันรอบกู้ไม่ถูกต้อง");
         if (
           loan.source === "new" &&
-          (loan.rateBps > 125 ||
-            loan.openingInterestCents !== 0 ||
+          (loan.openingInterestCents !== 0 ||
             loan.cycleStartDate !== loan.startDate)
         )
           return fail(
             400,
-            "กู้ใหม่ต้องไม่มีดอกยกมา และอัตราไม่เกิน 1.25% ต่อเดือน",
+            "กู้ใหม่ต้องไม่มีดอกยกมา และวันเริ่มรอบต้องตรงกับวันที่ให้กู้",
           );
         mutate((data) => {
           required(
@@ -932,8 +931,6 @@ export function createApp({
             balance = ledger(data, loan);
           if (balance.closed || balance.principalCents === 0)
             return fail(400, "รายการนี้คืนต้นครบแล้ว");
-          if (loan.source === "new" && change.rateBps > 125)
-            return fail(400, "อัตรากู้ใหม่ต้องไม่เกิน 1.25% ต่อเดือน");
           if (change.effectiveDate <= today())
             return fail(400, "เปลี่ยนอัตราได้ตั้งแต่งวดถัดไป");
           let boundary = loan.firstCycleEndDate;
