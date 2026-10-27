@@ -28,8 +28,15 @@ import {
   Check,
   Wallet,
   ShieldCheck,
+  Settings,
+  ChartColumn,
 } from "lucide-react";
 import { api, setCsrf, upload } from "./api";
+import { followUps, dueStatus } from "./domain/follow-up";
+import type { MessageSettings } from "./domain/reminder-message";
+import { TodayPanel, followUpLabel, needsAction } from "./components/follow-up";
+import { MonthlySummaryPage } from "./components/summary";
+import { SettingsPage } from "./components/settings";
 import { ModalView, type Modal } from "./components/modal";
 import {
   Button,
@@ -60,7 +67,7 @@ type Auth = {
   csrfToken?: string;
   smtpConfigured: boolean;
 };
-type Page = "overview" | "borrowers" | "history" | "reminders" | "backup";
+type Page = "overview" | "borrowers" | "history" | "reminders" | "summary" | "settings";
 const emptyData: LedgerData = {
   borrowers: [],
   loans: [],
@@ -76,7 +83,8 @@ const nav = [
   { id: "borrowers", title: "ผู้กู้และสัญญา", icon: Users },
   { id: "history", title: "ประวัติรับชำระ", icon: FileText },
   { id: "reminders", title: "ติดตามการชำระ", icon: CalendarDays },
-  { id: "backup", title: "สำรองข้อมูล", icon: Database },
+  { id: "summary", title: "สรุปรายเดือน", icon: ChartColumn },
+  { id: "settings", title: "ตั้งค่า / สำรอง", icon: Settings },
 ] satisfies { id: Page; title: string; icon: typeof Home }[];
 function AuthScreen({
   auth,
@@ -266,9 +274,12 @@ export default function App() {
   const [filter, setFilter] = useState("all");
   const [category, setCategory] = useState<LoanCategory>("active");
   const [busy, setBusy] = useState(false);
+  const [settings, setSettings] = useState<MessageSettings>({ politeEnding: "", promptPayId: "" });
   const today = todayBangkok();
   async function reload() {
-    setData(await api<LedgerData>("/data"));
+    const [ledger, saved] = await Promise.all([api<LedgerData>("/data"), api<MessageSettings>("/settings")]);
+    setData(ledger);
+    setSettings(saved);
   }
   async function loadAuth(code?: string) {
     const result = await api<Auth>("/auth/status");
@@ -280,6 +291,11 @@ export default function App() {
   useEffect(() => {
     void loadAuth().catch((e) => setError(String(e)));
   }, []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(""), 4000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   useEffect(() => {
     if (!auth?.user) return;
     const timer = window.setInterval(() => {
@@ -347,15 +363,19 @@ export default function App() {
   );
   const borrowerName = (id: string) =>
     data.borrowers.find((b) => b.id === id)?.name || "ผู้กู้";
+  const searchText = (l: Loan) => {
+    const b = data.borrowers.find((entry) => entry.id === l.borrowerId);
+    return `${loanDisplayName(borrowerName(l.borrowerId), l)} ${b?.nickname ?? ""} ${b?.phone ?? ""}`.toLowerCase();
+  };
   const loans = data.loans.filter(
     (l) =>
-      loanDisplayName(borrowerName(l.borrowerId), l).includes(search) &&
+      searchText(l).includes(search.trim().toLowerCase()) &&
       loanCategory(l, snapshots.get(l.id)) === category &&
-      (category !== "active" || filter !== "overdue" || isLoanOverdue(l, today)),
+      (category !== "active" || filter === "all" ||
+        (filter === "overdue" && isLoanOverdue(l, today)) ||
+        (filter === "owed" && (snapshots.get(l.id)?.interestCents ?? 0) > 0)),
   );
-  const dueLoans = realData.loans
-    .filter((l) => !snapshots.get(l.id)?.closed && (l.dueDate >= today || isLoanOverdue(l, today)))
-    .sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const chase = useMemo(() => followUps(data, today), [data, today]);
   const selectedLoan = data.loans.find((l) => l.id === selected && l.recordStatus !== "trashed-test");
   const snapshot = selectedLoan ? snapshots.get(selectedLoan.id) : undefined;
   async function mutate(path: string, body: unknown, method = "POST") {
@@ -476,6 +496,7 @@ export default function App() {
           <>
             {page === "overview" && (
               <>
+                <TodayPanel items={chase} open={setModal} select={setSelected} />
                 <div className="summary">
                   {[
                     {
@@ -513,7 +534,10 @@ export default function App() {
                   ))}
                 </div>
                 <p className="portfolio-scope">ยอดบัญชีจริงรวมเงินที่รับจากสัญญาปิดแล้ว · ไม่รวมสัญญาทดลองและถังขยะ</p>
-                <InterestOverview data={activeData} forecasts={forecasts} select={setSelected} today={today} />
+                <details className="interest-fold">
+                  <summary>ดอกแยกรายคน · ดอกที่เดินอยู่และคาดการณ์สิ้นเดือน</summary>
+                  <InterestOverview data={activeData} forecasts={forecasts} select={setSelected} today={today} />
+                </details>
                 <div className="dashboard-grid">
                   <section className="panel contracts">
                     <div className="panel-heading">
@@ -522,7 +546,7 @@ export default function App() {
                         <label className="search">
                           <Search />
                           <input
-                            placeholder="ค้นหาชื่อผู้กู้"
+                            placeholder="ค้นหาชื่อ ชื่อเล่น หรือเบอร์โทร"
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                           />
@@ -534,6 +558,7 @@ export default function App() {
                         >
                           <option value="all">ทุกสัญญาในหมวด</option>
                           <option value="overdue">เกินกำหนด</option>
+                          <option value="owed">มีดอกค้าง</option>
                         </select>}
                       </div>
                     </div>
@@ -565,38 +590,25 @@ export default function App() {
                   </section>
                   <div className="right-column">
                     <section className="panel reminders">
-                      <h2>กำหนดชำระ</h2>
-                      {dueLoans.length ? (
+                      <h2>นัดชำระถัดไป</h2>
+                      {chase.some((item) => !needsAction(item)) ? (
                         <div className="due-list">
-                          {dueLoans.slice(0, 5).map((l) => (
-                            <button
-                              key={l.id}
-                              onClick={() => setSelected(l.id)}
-                            >
-                              <span className="avatar">
-                                {borrowerName(l.borrowerId).slice(0, 1)}
-                              </span>
+                          {chase.filter((item) => !needsAction(item)).slice(0, 5).map((item) => (
+                            <button key={item.loan.id} onClick={() => setSelected(item.loan.id)}>
+                              <span className="avatar">{borrowerName(item.loan.borrowerId).slice(0, 1)}</span>
                               <div>
-                                <strong>{loanDisplayName(borrowerName(l.borrowerId), l)}</strong>
-                                <small>{date(l.dueDate)}</small>
+                                <strong>{loanDisplayName(borrowerName(item.loan.borrowerId), item.loan)}</strong>
+                                <small>{date(item.loan.dueDate)} · ดอก ฿{money(item.interestDueCents)}</small>
                               </div>
-                              <span
-                                className={`badge ${l.dueDate < today ? "late" : ""}`}
-                              >
-                                {l.dueDate < today
-                                  ? "เกินกำหนด"
-                                  : l.dueDate === today
-                                    ? "วันนี้"
-                                    : "รอชำระ"}
-                              </span>
+                              <span className="badge">รอชำระ</span>
                             </button>
                           ))}
                         </div>
                       ) : (
                         <Empty
                           calendar
-                          title="ยังไม่มีรายการถึงกำหนด"
-                          text="เมื่อมีรายการถึงกำหนด จะแสดงที่นี่"
+                          title="ยังไม่มีนัดถัดไป"
+                          text="สัญญาที่ยังไม่ถึงกำหนดจะแสดงที่นี่"
                         />
                       )}
                     </section>
@@ -774,28 +786,33 @@ export default function App() {
                 </div>
                 <p className="panel-note">
                   เตือนก่อนครบกำหนด 1 วันและวันครบกำหนด เวลา 13:00 น.
-                  ขณะเปิดแอปและคอมทำงาน การเชื่อม iPhone เป็นขั้นถัดไป
+                  ขณะเปิดแอปไว้ (บนคอมหรือมือถือ)
                 </p>
-                {!dueLoans.length ? (
+                {!chase.length ? (
                   <Empty calendar title="ยังไม่มีรายการต้องติดตาม" />
                 ) : (
                   <div className="follow-list">
-                    {dueLoans.map((l) => (
-                      <div key={l.id}>
+                    {chase.map((item) => (
+                      <div key={item.loan.id}>
                         <div>
-                          <h3>{loanDisplayName(borrowerName(l.borrowerId), l)}</h3>
+                          <h3>{loanDisplayName(borrowerName(item.loan.borrowerId), item.loan)}</h3>
                           <p>
-                            นัดชำระ {date(l.dueDate)}
+                            <span className={`badge ${item.status === "overdue" || item.interestOwedCents ? "late" : ""}`}>{followUpLabel(item)}</span>
+                            {" "}นัดชำระ {date(item.loan.dueDate)}
+                            {item.interestOwedCents > 0
+                              ? ` · ดอกค้าง ฿${money(item.interestOwedCents)}`
+                              : ` · ดอกงวดนี้ ฿${money(item.interestDueCents)}`}
                           </p>
                         </div>
-                        <Button secondary onClick={() => setSelected(l.id)}>
-                          ดูสัญญา
+                        <Button secondary onClick={() => setModal({ kind: "payment", loan: item.loan, suggestInterestCents: item.interestOwedCents })}>
+                          <Plus />
+                          รับเงิน
                         </Button>
                         <Button
-                          onClick={() => setModal({ kind: "contact", loan: l })}
+                          onClick={() => setModal({ kind: "contact", loan: item.loan })}
                         >
                           <MessageSquare />
-                          เตรียมข้อความ
+                          ส่งข้อความ
                         </Button>
                       </div>
                     ))}
@@ -803,36 +820,22 @@ export default function App() {
                 )}
               </section>
             )}
-            {page === "backup" && (
-              <section className="panel backup">
-                <Database className="large-icon" />
-                <h2>สำรองข้อมูลของคุณ</h2>
-                <p>
-                  เก็บไฟล์สำรองพร้อมประวัติการชำระ การแก้ไข
-                  และหลักฐานแนบไว้ในที่ปลอดภัย
-                </p>
-                <div className="backup-options">
-                  <a className="button" href="/api/backup" download>
-                    <Download />
-                    ดาวน์โหลดไฟล์สำรอง
-                  </a>
-                  <a className="button secondary" href="/api/export" download>
-                    <Download />
-                    ส่งออกสำหรับ Excel
-                  </a>
-                </div>
-                <div className="footnote">
-                  <Info />
-                  ไฟล์สำรองมีข้อมูลส่วนตัวและเอกสารแนบ แต่ไม่มีรหัสผ่านบัญชี
-                </div>
-              </section>
+            {page === "summary" && <MonthlySummaryPage data={data} today={today} />}
+            {page === "settings" && (
+              <SettingsPage
+                settings={settings}
+                saved={(next) => { setSettings(next); setNotice("บันทึกการตั้งค่าแล้ว"); }}
+                restored={async (message) => { await reload(); setNotice(message); }}
+              />
             )}
           </>
         )}
       </main>
       {modal && (
         <ModalView
+          key={modal.kind + ("loan" in modal ? modal.loan.id : "")}
           modal={modal}
+          settings={settings}
           data={data}
           snapshots={snapshots}
           busy={busy}
@@ -923,6 +926,7 @@ function LoanTable({
           <tr>
             <th>ผู้กู้</th>
             <th>เงินต้นคงเหลือ</th>
+            <th>ดอกค้าง</th>
             <th>ครบกำหนด</th>
             <th>สถานะ</th>
           </tr>
@@ -930,6 +934,7 @@ function LoanTable({
         <tbody>
           {loans.map((l) => {
             const s = snapshots.get(l.id);
+            const due = dueStatus(l, todayBangkok());
             return (
               <tr key={l.id} onClick={() => { if (l.recordStatus !== "trashed-test") select(l.id); }}>
                 <td>
@@ -943,16 +948,15 @@ function LoanTable({
                   </small>
                 </td>
                 <td>฿{money(s?.principalCents || 0)}</td>
+                <td className={s?.interestCents ? "owed" : ""}>{s?.interestCents ? `฿${money(s.interestCents)}` : "–"}</td>
                 <td>{date(l.dueDate)}</td>
                 <td>
                   <span
-                    className={`badge ${!s?.closed && isLoanOverdue(l, todayBangkok()) ? "late" : ""}`}
+                    className={`badge ${!s?.closed && due === "overdue" ? "late" : !s?.closed && due !== "upcoming" ? "soon" : ""}`}
                   >
                     {l.recordStatus === "trashed-test" ? "ลบแล้ว · ทดลอง" : l.recordStatus === "test" ? "ทดลอง · ไม่รวมยอด" : s?.closed
                       ? "ปิดแล้ว"
-                      : isLoanOverdue(l, todayBangkok())
-                        ? "เกินกำหนด"
-                        : "ปกติ"}
+                      : { overdue: "เกินกำหนด", today: "ครบวันนี้", tomorrow: "ครบพรุ่งนี้", upcoming: "ปกติ" }[due]}
                   </span>
                   {l.recordStatus && <button className="text-button status-toggle" disabled={busy}
                     onClick={event => { event.stopPropagation(); open({ kind: "loan-record", loan: l, action: l.recordStatus === "trashed-test" ? "restore-test" : "trash-test" }); }}>
@@ -1009,9 +1013,21 @@ function LoanDetail({
           <div className="panel-heading">
             <h2>รายละเอียดสัญญา</h2>
             <span className={`badge ${!s.closed && isLoanOverdue(loan, todayBangkok()) ? "late" : ""}`}>
-              {s.closed ? "ปิดหนี้แล้ว" : isLoanOverdue(loan, todayBangkok()) ? "เกินกำหนด" : "ปกติ"}
+              {s.closed ? "ปิดหนี้แล้ว" : { overdue: "เกินกำหนด", today: "ครบกำหนดวันนี้", tomorrow: "ครบกำหนดพรุ่งนี้", upcoming: "ปกติ" }[dueStatus(loan, todayBangkok())]}
             </span>
           </div>
+          {!s.closed && s.interestCents > 0 && (
+            <div className="owed-callout" role="status">
+              <div>
+                <p>ดอกค้างชำระ</p>
+                <strong>฿{money(s.interestCents)}</strong>
+                <small>ดอกของรอบที่ครบแล้วแต่ยังไม่ได้รับ{s.accruedInterestCents > 0 && ` · รอบนี้เดินอยู่อีก ฿${money(s.accruedInterestCents)}`}</small>
+              </div>
+              <Button onClick={() => open({ kind: "payment", loan, suggestInterestCents: s.interestCents })}>
+                <Plus />รับดอก ฿{money(s.interestCents)}
+              </Button>
+            </div>
+          )}
           <div className="detail-totals">
             <div>
               <p>เงินต้นคงเหลือ</p>

@@ -1,7 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Copy, Check, X } from "lucide-react";
-import { calculateLedger, addMonths, todayBangkok } from "../domain/ledger";
+import { Copy, Check, X, Download, Send } from "lucide-react";
+import QRCode from "qrcode";
+import { calculateLedger, addMonths, daysBetween, todayBangkok } from "../domain/ledger";
 import { loanDisplayName } from "../domain/loan-name";
+import { followUps } from "../domain/follow-up";
+import { reminderMessage, type MessageSettings } from "../domain/reminder-message";
+import { promptPayPayload } from "../domain/promptpay";
 import type { LoanRecordAction } from "../domain/loan-records";
 const recordActionTitles: Record<LoanRecordAction, string> = {
   "mark-test": "ย้ายเป็นสัญญาทดลอง",
@@ -35,8 +39,9 @@ export type Modal =
   | { kind: "borrower"; borrower?: Borrower }
   | { kind: "loan"; borrowerId?: string }
   | { kind: "edit-payment"; loan: Loan; payment: Payment }
+  | { kind: "payment"; loan: Loan; suggestInterestCents?: number }
   | {
-      kind: "payment" | "payoff" | "rate" | "adjustment" | "loan-correction" | "loan-purpose" | "contact";
+      kind: "payoff" | "rate" | "adjustment" | "loan-correction" | "loan-purpose" | "contact";
       loan: Loan;
     }
   | { kind: "attachment"; loan: Loan }
@@ -51,8 +56,10 @@ export function ModalView({
   submit,
   uploadOnly,
   busy,
+  settings,
 }: {
   modal: Modal;
+  settings: MessageSettings;
   data: LedgerData;
   snapshots: Map<string, LedgerSnapshot>;
   close: () => void;
@@ -95,15 +102,35 @@ export function ModalView({
   const [remainingPrincipal, setRemainingPrincipal] = useState(() => loan ? String((snapshots.get(loan.id)?.principalCents ?? loan.principalCents) / 100) : "");
   const [purpose, setPurpose] = useState(loan?.purpose ?? "");
   const [payoffInterest, setPayoffInterest] = useState("");
+  // After collecting a due or late payment, offer to move the due date to the next cycle end.
+  const nextDueDate = modal.kind === "payment" && s ? s.currentCycleEndDate : undefined;
+  const offerNextDue = Boolean(nextDueDate && loan && daysBetween(todayBangkok(), loan.dueDate) <= 1 && nextDueDate > loan.dueDate);
+  const [moveDueDate, setMoveDueDate] = useState(true);
   const futureRates = loan ? data.rateChanges.filter(r => r.loanId === loan.id && !r.canceledAt && r.effectiveDate > todayBangkok()) : [];
   const availableRateDates = loan && s && modal.kind === "rate"
     ? Array.from({ length: 24 }, (_, index) => addMonths(s.currentCycleEndDate, index, loan.anchorDay))
       .filter(day => !futureRates.some(r => r.effectiveDate === day)) : [];
-  const [message, setMessage] = useState(
-    loan
-      ? `สวัสดี ${loanDisplayName(borrower?.nickname || borrower?.name || "ผู้กู้", loan)} ขอแจ้งวันนัดชำระ ${date(loan.dueDate)} สำหรับรายการกู้ ${loan.id.slice(0, 8)} เงินต้นคงเหลือ ${money(snapshots.get(loan.id)?.principalCents || 0)} บาท หากชำระแล้วส่งหลักฐานให้ตรวจสอบได้ ขอบคุณครับ/ค่ะ`
-      : "",
-  );
+  const followUp = modal.kind === "contact" ? followUps(data, todayBangkok()).find((item) => item.loan.id === modal.loan.id) : undefined;
+  const [message, setMessage] = useState(followUp ? reminderMessage(followUp, settings) : "");
+  const [qr, setQr] = useState("");
+  useEffect(() => {
+    if (!followUp || !settings.promptPayId) return;
+    void QRCode.toDataURL(promptPayPayload(settings.promptPayId, followUp.interestDueCents), { width: 320, margin: 2 })
+      .then(setQr)
+      .catch(() => setQr(""));
+  }, [followUp?.interestDueCents, settings.promptPayId]);
+  const suggested = modal.kind === "payment" ? modal.suggestInterestCents ?? 0 : 0;
+  const [amounts, setAmounts] = useState(() => ({
+    total: editingPayment ? String(editingPayment.totalCents / 100) : suggested ? String(suggested / 100) : "",
+    principal: editingPayment ? String(editingPayment.principalCents / 100) : "0",
+    interest: editingPayment ? String(editingPayment.interestCents / 100) : suggested ? String(suggested / 100) : "0",
+  }));
+  const sum = (principal: string, interest: string) => String((Math.round(Number(principal) * 100) + Math.round(Number(interest) * 100)) / 100);
+  const setPart = (part: "principal" | "interest", value: string) =>
+    setAmounts((current) => {
+      const next = { ...current, [part]: value };
+      return { ...next, total: sum(next.principal, next.interest) };
+    });
   const titles = {
     "loan-record": modal.kind === "loan-record" ? recordActionTitles[modal.action] : "จัดหมวดสัญญา",
     borrower:
@@ -193,6 +220,8 @@ export function ModalView({
           ...((modal.kind === "payoff" || editingPayment?.isPayoff) ? { payoffMode: "owner" } : {}),
           ...(editingPayment ? { editReason: field(f, "editReason") } : {}),
         }, editingPayment ? "PATCH" : "POST");
+        if (offerNextDue && moveDueDate && nextDueDate)
+          await submit(`/loans/${modal.loan.id}`, { dueDate: nextDueDate, reason: "เลื่อนวันนัดเป็นงวดถัดไปหลังรับชำระ" }, "PATCH");
       } else if (modal.kind === "rate")
         await submit("/rate-changes", {
           loanId: modal.loan.id,
@@ -492,50 +521,50 @@ export function ModalView({
                         }} />
                         จำวันที่จ่ายจริงไม่ได้ ใช้วันที่บันทึกและระบุไว้ในประวัติ
                       </label>
+                      {offerNextDue && nextDueDate && (
+                        <label className="payment-date-unknown">
+                          <input type="checkbox" checked={moveDueDate} onChange={(e) => setMoveDueDate(e.target.checked)} />
+                          เลื่อนวันนัดชำระเป็นงวดถัดไป {date(nextDueDate)} (เดิม {date(loan!.dueDate)})
+                        </label>
+                      )}
                       <div className="payment-interest-context" role="status">
-                        <p>ดอกตามสูตรในรอบที่เลือก สำหรับอ้างอิง</p>
-                        <strong>฿{money(s?.cycleInterest.earnedInterestCents || 0)}</strong>
-                        <small>เป็นดอกของรอบนี้ตามสูตร ไม่ใช่ยอดที่บังคับเรียกเก็บ</small>
-                        <small>คุณระบุยอดดอกที่รับจริงเองได้ ไม่จำกัดตามยอดคำนวณ · ไม่มีค่าปรับอัตโนมัติ</small>
-                        <small>ส่วนที่รับเกินยอดสูตรเป็นดอกรับตามตกลง ไม่เป็นเครดิตหักดอกล่วงหน้า</small>
+                        <p>ดอกค้างชำระ ณ วันที่เลือก</p>
+                        <strong className={s?.interestCents ? "owed" : ""}>฿{money(s?.interestCents || 0)}</strong>
+                        {(s?.accruedInterestCents || 0) > 0 && <small>ดอกรอบปัจจุบันที่เดินอยู่ (ยังไม่ครบรอบ) ฿{money(s?.accruedInterestCents || 0)}</small>}
+                        <div className="quick-fill">
+                          {(s?.interestCents || 0) > 0 && <button type="button" className="text-button"
+                            onClick={() => setPart("interest", String((s?.interestCents || 0) / 100))}>รับดอกค้าง ฿{money(s?.interestCents || 0)}</button>}
+                          {(s?.cycleInterest.fullInterestCents || 0) > 0 && <button type="button" className="text-button"
+                            onClick={() => setPart("interest", String((s?.cycleInterest.fullInterestCents || 0) / 100))}>ดอก 1 เดือน ฿{money(s?.cycleInterest.fullInterestCents || 0)}</button>}
+                        </div>
+                        <small>ตัวเลขเป็นยอดอ้างอิงตามสูตร คุณกรอกยอดที่รับจริงเองได้ · ส่วนที่รับเกินไม่เป็นเครดิตงวดถัดไป</small>
                       </div>
                       <div className="form-grid">
-                        <Input
-                          label="ยอดรับเงินจริง (บาท) *"
-                          name="total"
-                          type="number"
-                          min="0.01"
-                          step="0.01"
-                          value={editingPayment ? editingPayment.totalCents / 100 : undefined}
-                          required
-                        />
-                        <Input
-                          label="คืนต้น (บาท) *"
-                          name="principal"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={editingPayment ? editingPayment.principalCents / 100 : "0"}
-                          required
-                        />
-                        <Input
-                          label="ชำระดอก (บาท) *"
-                          name="interest"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          value={editingPayment ? editingPayment.interestCents / 100 : "0"}
-                          required
-                        />
+                        <label className="field">ชำระดอก (บาท) *
+                          <input name="interest" type="number" min="0" step="0.01" required inputMode="decimal"
+                            value={amounts.interest} onChange={(e) => setPart("interest", e.target.value)} />
+                        </label>
+                        <label className="field">คืนต้น (บาท) *
+                          <input name="principal" type="number" min="0" step="0.01" required inputMode="decimal"
+                            value={amounts.principal} onChange={(e) => setPart("principal", e.target.value)} />
+                        </label>
+                        <label className="field">ยอดรับเงินจริง (บาท) *
+                          <input name="total" type="number" min="0.01" step="0.01" required inputMode="decimal"
+                            value={amounts.total} onChange={(e) => setAmounts((current) => ({
+                              ...current, total: e.target.value,
+                              interest: String(Math.max(0, Math.round(Number(e.target.value) * 100) - Math.round(Number(current.principal) * 100)) / 100),
+                            }))} />
+                          <small>รวมให้อัตโนมัติ · แก้ยอดนี้แล้วระบบคิดส่วนดอกให้</small>
+                        </label>
                       </div>
-                      <p className="panel-note">
-                        คืนต้น + ชำระดอก ต้องเท่ากับยอดรับจริง
-                        จ่ายเฉพาะดอกได้โดยคืนต้นเป็น 0 ยอดดอกให้กรอกตามที่คุณรับจริง
-                      </p>
                     </>
                   ) : (
                     <div className="payoff-preview">
                       <p>เงินต้น ฿{money(s?.principalCents || 0)}</p>
+                      <p>ดอกตามสูตรถึงวันที่ปิด ฿{money(s?.payoffInterestCents || 0)}
+                        {(s?.interestCents || 0) > 0 && <> (ค้างชำระ ฿{money(s?.interestCents || 0)} + ดอกตามวันรอบนี้ ฿{money(s?.accruedInterestCents || 0)})</>}
+                        {" "}<button type="button" className="text-button" onClick={() => setPayoffInterest(String((s?.payoffInterestCents || 0) / 100))}>ใช้ยอดนี้</button>
+                      </p>
                       <label className="field">ดอกที่รับจริงตอนปิดหนี้ (บาท) *
                         <input name="interest" type="number" min="0" step="0.01" required value={payoffInterest} onChange={e => setPayoffInterest(e.target.value)} />
                         <small>กรอกยอดที่ได้รับจริง ไม่มีดอกให้กรอก 0 ระบบจะไม่เติมดอกจากสูตรแทนคุณ</small>
@@ -712,8 +741,25 @@ export function ModalView({
                       required
                     />
                   </label>
-                  <p className="panel-note">หากต้องการแจ้งยอดดอก ให้พิมพ์ยอดที่คุณตกลงเรียกเก็บในข้อความเอง</p>
+                  {qr && followUp && (
+                    <div className="promptpay-qr">
+                      <img src={qr} alt={`QR พร้อมเพย์ ยอด ${money(followUp.interestDueCents)} บาท`} />
+                      <div>
+                        <strong>QR พร้อมเพย์ {followUp.interestDueCents ? `฿${money(followUp.interestDueCents)}` : "(ผู้กู้ใส่ยอดเอง)"}</strong>
+                        <small>บันทึกรูปนี้แล้วส่งตามข้อความ ผู้กู้สแกนจ่ายได้ทันที</small>
+                        <a className="button secondary" href={qr} download={`promptpay-${borrower?.nickname || borrower?.name || "qr"}.png`}>
+                          <Download />บันทึกรูป QR
+                        </a>
+                      </div>
+                    </div>
+                  )}
+                  {!settings.promptPayId && <p className="panel-note">ใส่เลขพร้อมเพย์ในหน้าตั้งค่า เพื่อแนบ QR ตามยอดดอกให้ผู้กู้สแกนจ่าย</p>}
                   <div className="actions-wrap">
+                    {channel === "LINE" && (
+                      <a className="button" href={`https://line.me/R/msg/text/?${encodeURIComponent(message)}`} target="_blank" rel="noreferrer">
+                        <Send />ส่งทาง LINE
+                      </a>
+                    )}
                     <Button
                       secondary
                       onClick={() =>
@@ -740,17 +786,8 @@ export function ModalView({
                         เปิด Facebook
                       </a>
                     )}
-                    {channel === "LINE" && (
-                      <a
-                        className="button secondary"
-                        href="https://line.me/"
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        เปิด LINE
-                      </a>
-                    )}
                   </div>
+                  {channel === "LINE" && <p className="panel-note">"ส่งทาง LINE" เปิดแอป LINE บนมือถือพร้อมข้อความ ให้เลือกผู้กู้แล้วกดส่ง</p>}
                   <p className="panel-note">
                     หลังส่งด้วยบัญชีส่วนตัวแล้ว จึงกด "ส่งแล้ว"
                     การคัดลอกยังไม่บันทึกว่าส่ง

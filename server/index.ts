@@ -9,6 +9,11 @@ if (!Number.isInteger(port) || port < 1 || port > 65535)
 const app = createApp({
   dataDir: resolve(process.env.LOAN_DATA_DIR || ".data"),
   staticDir: resolve("dist"),
+  ...(process.env.LOAN_BACKUP_DIR ? { backupDir: resolve(process.env.LOAN_BACKUP_DIR) } : {}),
+  allowedHosts: (process.env.ALLOWED_HOSTS ?? "")
+    .split(",")
+    .map((host) => host.trim().toLowerCase())
+    .filter(Boolean),
 });
 app.server.on("error", (error) => {
   process.stderr.write(`เปิดแอปไม่ได้: ${error.message}\n`);

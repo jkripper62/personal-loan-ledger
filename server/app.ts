@@ -4,7 +4,16 @@ import {
   type ServerResponse,
 } from "node:http";
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, readFileSync, existsSync, statSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  writeFileSync,
+  renameSync,
+  readdirSync,
+  rmSync,
+} from "node:fs";
 import {
   randomBytes,
   randomUUID,
@@ -60,6 +69,10 @@ interface Owner {
   passwordHash: string;
   recoveryHash: string;
 }
+interface Settings {
+  politeEnding: string;
+  promptPayId: string;
+}
 interface Session {
   csrf: string;
   expires: number;
@@ -79,6 +92,22 @@ class HttpError extends Error {
 const fail = (status: number, message: string): never => {
   throw new HttpError(status, message);
 };
+// Ledger rules throw plain Error with an owner-facing message; anything else
+// (TypeError, SyntaxError from stored data, SQLite errors) is a defect.
+const isUnexpected = (error: unknown) =>
+  !(error instanceof HttpError) &&
+  (!(error instanceof Error) || error.constructor !== Error || "code" in error);
+const parseInput = <T>(parse: () => T, message: string): T => {
+  try {
+    return parse();
+  } catch {
+    return fail(400, message);
+  }
+};
+const defaultLogError = (error: unknown, context: string) =>
+  process.stderr.write(
+    `[${new Date().toISOString()}] ${context}\n${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+  );
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
     return fail(400, "ข้อมูลไม่ถูกต้อง");
@@ -167,10 +196,18 @@ export function createApp({
   dataDir,
   staticDir,
   clock = () => new Date(),
+  logError = defaultLogError,
+  backupDir = join(dataDir, "backups"),
+  keepBackups = 30,
+  allowedHosts = [],
 }: {
   dataDir: string;
   staticDir?: string;
   clock?: () => Date;
+  logError?: (error: unknown, context: string) => void;
+  backupDir?: string;
+  keepBackups?: number;
+  allowedHosts?: string[];
 }) {
   mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(join(dataDir, "loans.sqlite"));
@@ -193,20 +230,64 @@ export function createApp({
     const raw = load("owner");
     return raw ? JSON.parse(raw) : null;
   };
+  const buildBackup = () => {
+    const data = getData();
+    const attachmentFiles = data.attachments.map((attachment) => {
+      const row = db.prepare("SELECT bytes FROM files WHERE id=?").get(attachment.id);
+      if (!row || !(row.bytes instanceof Uint8Array))
+        return fail(500, "หลักฐานไม่ครบ ไม่สามารถสำรองได้");
+      return { id: attachment.id, base64: Buffer.from(row.bytes).toString("base64") };
+    });
+    return { version: 1, app: "personal-loan-ledger", exportedAt: now(), data, attachmentFiles, settings: getSettings() };
+  };
+  const getSettings = (): Settings => ({ politeEnding: "", promptPayId: "", ...JSON.parse(load("settings") ?? "{}") });
+  // Today's file is rewritten after every change; older days are kept up to the limit.
+  const writeDailyBackup = () => {
+    try {
+      mkdirSync(backupDir, { recursive: true });
+      const target = join(backupDir, `backup-${today()}.json`);
+      writeFileSync(target + ".tmp", JSON.stringify(buildBackup()));
+      renameSync(target + ".tmp", target);
+      const daily = readdirSync(backupDir).filter((name) => /^backup-\d{4}-\d{2}-\d{2}\.json$/.test(name)).sort();
+      for (const name of daily.slice(0, Math.max(0, daily.length - keepBackups)))
+        rmSync(join(backupDir, name));
+    } catch (error) {
+      logError(error, "automatic backup");
+    }
+  };
   const mutate = <T>(fn: (data: LedgerData) => T): T => {
     db.exec("BEGIN IMMEDIATE");
+    let result: T;
     try {
       const data = getData();
-      const result = fn(data);
+      result = fn(data);
       save("ledger", data);
       db.exec("COMMIT");
-      return result;
     } catch (error) {
       db.exec("ROLLBACK");
       throw error;
     }
+    writeDailyBackup();
+    return result;
   };
-  const sessions = new Map<string, Session>();
+  // Sessions survive restarts; only a hash of each cookie token is stored.
+  const sessions = {
+    all: (): Record<string, Session> => JSON.parse(load("sessions") ?? "{}"),
+    get(token: string): Session | undefined {
+      return token ? this.all()[digest(token)] : undefined;
+    },
+    set(token: string, session: Session) {
+      const time = clock().getTime();
+      const live = Object.fromEntries(Object.entries(this.all()).filter(([, s]) => s.expires > time));
+      save("sessions", { ...live, [digest(token)]: session });
+    },
+    delete(token: string) {
+      const { [digest(token)]: _removed, ...rest } = this.all();
+      save("sessions", rest);
+    },
+    clear: () => save("sessions", {}),
+  };
+  const sessionDays = 30;
   const attempts = new Map<string, { count: number; until: number }>();
   let resetToken: ResetToken | null = null;
   const smtpConfigured = Boolean(
@@ -319,24 +400,27 @@ export function createApp({
   function setSession(response: ServerResponse) {
     const token = randomBytes(32).toString("hex"),
       csrf = randomBytes(32).toString("hex");
-    sessions.set(token, { csrf, expires: clock().getTime() + 12 * 3600000 });
+    sessions.set(token, { csrf, expires: clock().getTime() + sessionDays * 86400000 });
     response.setHeader(
       "Set-Cookie",
-      `loan_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`,
+      `loan_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${sessionDays * 86400}`,
     );
     return csrf;
   }
   const server = createServer(async (request, response) => {
     try {
-      const host = request.headers.host ?? "";
-      if (!/^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host))
+      const host = (request.headers.host ?? "").toLowerCase();
+      const localHost = /^(127\.0\.0\.1|localhost|\[::1\])(?::\d+)?$/.test(host);
+      // Phone access arrives through `tailscale serve`, which proxies the owner's own HTTPS address here.
+      const phoneHost = allowedHosts.includes(host);
+      if (!localHost && !phoneHost)
         return fail(403, "โฮสต์ไม่อยู่ในเครื่องนี้");
       const url = new URL(request.url ?? "/", `http://${host}`),
         path = url.pathname,
         method = request.method ?? "GET";
       if (method !== "GET" && method !== "HEAD") {
         const allowed = new Set([
-          `http://${host}`,
+          localHost ? `http://${host}` : `https://${host}`,
           process.env.APP_ORIGIN,
           "http://127.0.0.1:5173",
           "http://localhost:5173",
@@ -414,7 +498,7 @@ export function createApp({
           );
         const filename = request.headers["x-filename"];
         if (typeof filename !== "string") return fail(400, "ต้องระบุชื่อไฟล์");
-        const name = text(decodeURIComponent(filename), "ชื่อไฟล์", true, 250);
+        const name = text(parseInput(() => decodeURIComponent(filename), "ชื่อไฟล์ไม่ถูกต้อง"), "ชื่อไฟล์", true, 250);
         if (/[\u0000-\u001f]/.test(name))
           return fail(400, "ชื่อไฟล์ไม่ถูกต้อง");
         const attachment: Attachment = {
@@ -491,26 +575,9 @@ export function createApp({
       if (path === "/api/backup" && method === "GET") {
         db.exec("BEGIN");
         try {
-          const data = getData();
-          const attachmentFiles = data.attachments.map((attachment) => {
-            const row = db
-              .prepare("SELECT bytes FROM files WHERE id=?")
-              .get(attachment.id);
-            if (!row || !(row.bytes instanceof Uint8Array))
-              return fail(500, "หลักฐานไม่ครบ ไม่สามารถสำรองได้");
-            return {
-              id: attachment.id,
-              base64: Buffer.from(row.bytes).toString("base64"),
-            };
-          });
+          const backup = buildBackup();
           db.exec("COMMIT");
-          return json(response, 200, {
-            version: 1,
-            app: "personal-loan-ledger",
-            exportedAt: now(),
-            data,
-            attachmentFiles,
-          });
+          return json(response, 200, backup);
         } catch (error) {
           db.exec("ROLLBACK");
           throw error;
@@ -526,9 +593,48 @@ export function createApp({
         response.end(createLedgerCsv(getData(), today()));
         return;
       }
+      if (path === "/api/restore" && method === "POST") {
+        const raw = await readBody(request, 300 * 1024 * 1024);
+        const invalid = "ไฟล์นี้ไม่ใช่ไฟล์สำรองของบัญชีเงินกู้ หรือไฟล์เสียหาย";
+        const backup = object(parseInput(() => JSON.parse(raw.toString()), invalid));
+        const data = object(backup.data);
+        const keys = ["borrowers", "loans", "payments", "rateChanges", "adjustments", "contacts", "attachments", "audit"] as const;
+        if (backup.app !== "personal-loan-ledger" || backup.version !== 1 || keys.some((key) => !Array.isArray(data[key])) ||
+          !Array.isArray(backup.attachmentFiles))
+          return fail(400, invalid);
+        const restored = data as unknown as LedgerData;
+        const files = new Map((backup.attachmentFiles as unknown[]).map((entry) => {
+          const file = object(entry);
+          return [text(file.id, "ไฟล์แนบ", true), Buffer.from(text(file.base64, "ไฟล์แนบ", true), "base64")] as const;
+        }));
+        if (restored.attachments.some((attachment) => !files.has(attachment.id)))
+          return fail(400, "ไฟล์สำรองมีหลักฐานแนบไม่ครบ");
+        parseInput(() => restored.loans.forEach((loan) => ledger(restored, loan)), invalid);
+        mkdirSync(backupDir, { recursive: true });
+        writeFileSync(join(backupDir, `before-restore-${now().replace(/[:.]/g, "-")}.json`), JSON.stringify(buildBackup()));
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          db.exec("DELETE FROM files");
+          const insert = db.prepare("INSERT INTO files (id, bytes) VALUES (?, ?)");
+          for (const attachment of restored.attachments) insert.run(attachment.id, files.get(attachment.id)!);
+          if (backup.settings !== undefined) {
+            const settings = object(backup.settings);
+            save("settings", { politeEnding: text(settings.politeEnding, invalid), promptPayId: text(settings.promptPayId, invalid) });
+          }
+          audit(restored, "backup.restore", "ledger", `นำข้อมูลสำรองวันที่ ${String(backup.exportedAt ?? "")} กลับมาใช้`);
+          save("ledger", restored);
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+        writeDailyBackup();
+        return json(response, 200, { ok: true, borrowers: restored.borrowers.length, loans: restored.loans.length });
+      }
       const body =
-        method === "POST" || method === "PATCH"
-          ? object(JSON.parse((await readBody(request)).toString() || "{}"))
+        method === "POST" || method === "PATCH" || method === "PUT"
+          ? await readBody(request).then((raw) =>
+              object(parseInput(() => JSON.parse(raw.toString() || "{}"), "ข้อมูลไม่ถูกต้อง")))
           : {};
       if (path === "/api/auth/logout" && method === "POST") {
         if (!session) return fail(401, "กรุณาเข้าสู่ระบบ");
@@ -634,7 +740,7 @@ export function createApp({
       }
       if (path === "/api/auth/setup" && method === "POST") {
         const address = request.socket.remoteAddress;
-        if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? ""))
+        if (!localHost || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(address ?? ""))
           return fail(403, "สร้างบัญชีได้จากเครื่องนี้เท่านั้น");
         if (getOwner()) return fail(409, "มีบัญชีเจ้าของแล้ว");
         const email = text(body.email, "อีเมล", true).toLowerCase(),
@@ -684,6 +790,18 @@ export function createApp({
           email: owner.email,
           csrfToken: setSession(response),
         });
+      }
+      if (path === "/api/settings" && method === "GET")
+        return json(response, 200, getSettings());
+      if (path === "/api/settings" && method === "PUT") {
+        const politeEnding = text(body.politeEnding, "คำลงท้าย", false, 20);
+        if (!["", "ครับ", "ค่ะ"].includes(politeEnding)) return fail(400, "คำลงท้ายต้องเป็น ครับ หรือ ค่ะ");
+        const promptPayId = text(body.promptPayId, "พร้อมเพย์", false, 40).replace(/[\s-]/g, "");
+        if (promptPayId && !/^(0\d{9}|\d{13})$/.test(promptPayId))
+          return fail(400, "พร้อมเพย์ต้องเป็นเบอร์มือถือ 10 หลัก หรือเลขบัตรประชาชน 13 หลัก");
+        const settings: Settings = { politeEnding, promptPayId };
+        save("settings", settings);
+        return json(response, 200, settings);
       }
       if (path === "/api/data" && method === "GET")
         return json(response, 200, getData());
@@ -1092,7 +1210,7 @@ export function createApp({
         (method === "GET" || method === "HEAD")
       ) {
         const root = resolve(staticDir),
-          decoded = decodeURIComponent(path);
+          decoded = parseInput(() => decodeURIComponent(path), "ไม่พบหน้า");
         if (
           decoded.split("/").some((part) => part.startsWith(".")) ||
           decoded.includes("\\")
@@ -1133,9 +1251,13 @@ export function createApp({
       }
       return fail(404, "ไม่พบรายการหรือเส้นทางนี้");
     } catch (error) {
+      const unexpected = isUnexpected(error);
+      if (unexpected) logError(error, `${request.method} ${request.url}`);
       if (!response.headersSent)
-        json(response, error instanceof HttpError ? error.status : 400, {
-          error: error instanceof Error ? error.message : "ดำเนินการไม่สำเร็จ",
+        json(response, unexpected ? 500 : error instanceof HttpError ? error.status : 400, {
+          error: unexpected
+            ? "ระบบขัดข้อง บันทึกรายละเอียดไว้ในไฟล์ log แล้ว"
+            : error instanceof Error ? error.message : "ดำเนินการไม่สำเร็จ",
         });
       else response.destroy();
     }
