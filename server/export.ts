@@ -3,6 +3,7 @@ import { calculateLedger } from "../src/domain/ledger.js";
 import { compareEvents } from "../src/domain/chronology.js";
 import { loanDisplayName } from "../src/domain/loan-name.js";
 import { realLedgerData } from "../src/domain/loan-records.js";
+import { withNextDueDates } from "../src/domain/due-date.js";
 
 const money = (value: number) => (value / 100).toFixed(2);
 function csvCell(value: string): string {
@@ -11,7 +12,7 @@ function csvCell(value: string): string {
 }
 
 export function createLedgerCsv(allData: LedgerData, asOf: string): string {
-  const data = realLedgerData(allData);
+  const data = realLedgerData(withNextDueDates(allData, asOf));
   const names = new Map(
     data.borrowers.map((borrower) => [borrower.id, borrower.name]),
   );

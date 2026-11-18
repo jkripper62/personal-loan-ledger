@@ -126,6 +126,71 @@ it("excludes trial loans and their receipts from real exports and reminders, ret
   expect(saved.body.payments).toMatchObject([{ loanId: realClosed.body.id, canceledAt: null, principalCents: 400000, interestCents: 40000 }, { id: receipt.body.id, canceledAt: null, interestCents: 20000 }]);
   expect(saved.text).toContain("loan.record-status");
 });
+it("persists custom loan display order without changing loan balances or allowing cross-category moves", async () => {
+  const api = await client();
+  expect((await api.request("/api/loans/reorder", "POST", {loanId:"a",targetId:"b",placement:"before"})).response.status).toBe(401);
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "เรียงลำดับ" });
+  const first = await api.request("/api/loans", "POST", loanInput(borrower.body.id));
+  const second = await api.request("/api/loans", "POST", loanInput(borrower.body.id));
+  const third = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), isTest: true });
+  expect((await api.request("/api/loans/reorder", "POST", {loanId:first.body.id,targetId:third.body.id,placement:"before"})).response.status).toBe(400);
+  expect((await api.request("/api/loans/reorder", "POST", {loanId:first.body.id,targetId:second.body.id,placement:"invalid"})).response.status).toBe(400);
+  expect((await api.request("/api/loans/reorder", "POST", {loanId:second.body.id,targetId:first.body.id,placement:"before"})).response.status).toBe(200);
+  const saved = await api.request("/api/data");
+  expect(saved.body.loanOrder).toEqual([second.body.id, first.body.id, third.body.id]);
+  expect((saved.body.loans as Array<{id:string}>).map(item => item.id)).toEqual([first.body.id, second.body.id, third.body.id]);
+  expect((await api.request("/api/backup")).text).toContain('"loanOrder"');
+  expect((saved.body.audit as Array<{action:string}>).some(item => item.action === "loan.reorder")).toBe(true);
+});
+it("advances paid appointments, restores cancelled dues, and lets the owner reschedule independently of interest cycles", async () => {
+  let clock = new Date("2026-11-11T06:00:00.000Z");
+  const api = await client(undefined, undefined, () => clock);
+  await api.request("/api/auth/setup", "POST", credentials);
+  const borrower = await api.request("/api/borrowers", "POST", { name: "ทดสอบวันนัดอัตโนมัติ" });
+  const created = await api.request("/api/loans", "POST", { ...loanInput(borrower.body.id), dueDate: "2026-10-30" });
+  const id = created.body.id;
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-10-30" }]);
+  expect((await api.request("/api/reminders")).body.items).toMatchObject([{ loanId: id, dueDate: "2026-10-30", kind: "overdue" }]);
+  const receipt = await api.request("/api/payments", "POST", {
+    loanId: id, date: "2026-10-25", totalCents: 10000, principalCents: 0,
+    interestCents: 10000, note: "", isPayoff: false,
+  });
+  expect(receipt.response.status).toBe(201);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-11-30" }]);
+  expect((await api.request("/api/reminders")).body.items).toHaveLength(0);
+  expect((await api.request("/api/export")).text).toContain('"2026-11-30"');
+  expect(JSON.parse((await api.request("/api/backup")).text).data.loans[0].dueDate).toBe("2026-10-30");
+
+  expect((await api.request(`/api/payments/${receipt.body.id}/cancel`, "POST", { reason: "แก้วันบันทึก" })).response.status).toBe(200);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-10-30" }]);
+  const newReceipt = await api.request("/api/payments", "POST", {
+    loanId: id, date: "2026-10-25", totalCents: 10000, principalCents: 0,
+    interestCents: 10000, note: "", isPayoff: false,
+  });
+  expect(newReceipt.response.status).toBe(201);
+  const manual = await api.request(`/api/loans/${id}`, "PATCH", { dueDate: "2026-11-05", reason: "เลื่อนนัดตามตกลง" });
+  expect(manual.response.status).toBe(200);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-11-05" }]);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ dueDateSetAt: expect.any(String) }]);
+
+  // Backdating a receipt before the manual change must not move the new appointment.
+  expect((await api.request("/api/payments", "POST", {
+    loanId: id, date: "2026-11-05", totalCents: 10000, principalCents: 0,
+    interestCents: 10000, note: "", isPayoff: false,
+  })).response.status).toBe(201);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-11-05" }]);
+  expect((await api.request("/api/reminders")).body.items).toMatchObject([{ loanId: id, dueDate: "2026-11-05", kind: "overdue" }]);
+  const nextReceipt = await api.request("/api/payments", "POST", {
+    loanId: id, date: "2026-11-11", totalCents: 10000, principalCents: 0,
+    interestCents: 10000, note: "", isPayoff: false,
+  });
+  expect(nextReceipt.response.status, nextReceipt.text).toBe(201);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ id, dueDate: "2026-12-05" }]);
+  expect((await api.request("/api/reminders")).body.items).toHaveLength(0);
+  const balance = (await api.request("/api/data")).body.loans as Array<{principalCents:number;rateBps:number;firstCycleEndDate:string}>;
+  expect(balance[0]).toMatchObject({ principalCents: 1000000, rateBps: 1000, firstCycleEndDate: "2026-10-15" });
+});
 it("records actual monthly rates without changing source or scaling percent, and schedules them on valid future boundaries", async () => {
   const api = await client();
   await api.request("/api/auth/setup", "POST", credentials);
@@ -659,7 +724,8 @@ it("enforces same-day payment totals and can cancel a payoff to resume the origi
       })
     ).response.status,
   ).toBe(200);
-  expect((await api.request("/api/reminders")).body.items).toHaveLength(1);
+  expect((await api.request("/api/reminders")).body.items).toHaveLength(0);
+  expect((await api.request("/api/data")).body.loans).toMatchObject([{ dueDate: "2026-11-01" }]);
   expect(
     (
       await api.request(`/api/payments/${payoff.body.id}/cancel`, "POST", {

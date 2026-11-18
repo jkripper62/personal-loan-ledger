@@ -35,6 +35,7 @@ export type Modal =
   | { kind: "borrower"; borrower?: Borrower }
   | { kind: "loan"; borrowerId?: string }
   | { kind: "edit-payment"; loan: Loan; payment: Payment }
+  | { kind: "due-date"; loan: Loan }
   | {
       kind: "payment" | "payoff" | "rate" | "adjustment" | "loan-correction" | "loan-purpose" | "contact";
       loan: Loan;
@@ -117,6 +118,7 @@ export function ModalView({
     rate: "เปลี่ยนอัตรางวดถัดไป",
     adjustment: "เพิ่ม/ลดยอด (ขั้นสูง)",
     "loan-correction": "แก้ต้น / ดอก / วันนัด",
+    "due-date": "แก้วันนัดชำระ",
     "loan-purpose": "ตั้งชื่อรายการกู้",
     contact: "เตรียมข้อความติดตาม",
     attachment: "แนบหลักฐาน",
@@ -224,6 +226,8 @@ export function ModalView({
         await submit(`/loans/${modal.loan.id}/record-status`, { action: modal.action, reason: field(f, "reason") });
       else if (modal.kind === "loan-purpose")
         await submit(`/loans/${modal.loan.id}`, { purpose: field(f, "purpose"), reason: "เจ้าของตั้งชื่อรายการกู้" }, "PATCH");
+      else if (modal.kind === "due-date")
+        await submit(`/loans/${modal.loan.id}`, { dueDate: field(f, "dueDate"), reason: field(f, "reason") }, "PATCH");
       else if (modal.kind === "cancel")
         await submit(modal.path, { reason: field(f, "reason") });
       else if (modal.kind === "contact")
@@ -604,6 +608,13 @@ export function ModalView({
                     ช่องนี้รับจำนวนที่จะเพิ่มหรือลด หากต้องการใส่ยอดสุดท้าย ให้เลือก “แก้ต้น / ดอก / วันนัด” แทน ค่าบวกเพิ่มยอด ค่าลบลดยอด
                   </p>
                   <Input label="เหตุผล *" name="reason" required />
+                </>
+              )}
+              {modal.kind === "due-date" && (
+                <>
+                  <p className="panel-note">เลือกวันนัดชำระใหม่ได้เอง โดยไม่แก้เงินต้น อัตราดอก หรือวันตัดรอบคิดดอก เมื่อบันทึกเงินรับของงวดนี้ ระบบจะเลื่อนไปงวดถัดไปให้อัตโนมัติ</p>
+                  <Input label="วันนัดชำระใหม่ *" name="dueDate" type="date" min={modal.loan.startDate} value={modal.loan.dueDate} required />
+                  <Input label="เหตุผลที่เปลี่ยนวันนัด *" name="reason" value="ปรับวันนัดตามตกลง" required />
                 </>
               )}
               {modal.kind === "loan-correction" && (

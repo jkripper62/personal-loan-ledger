@@ -1,4 +1,4 @@
-param([switch]$NoBrowser)
+﻿param([switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 $loanRoot = Split-Path -Parent $PSScriptRoot
 $loanData = Join-Path $loanRoot '.data'
@@ -6,7 +6,10 @@ $loanEntry = Join-Path $loanRoot 'server-dist\server\index.js'
 $loanPort = if ($env:PORT) { $env:PORT } else { '4310' }
 $loanUrl = "http://127.0.0.1:$loanPort"
 if (-not (Test-Path -LiteralPath $loanEntry)) { throw 'App build is missing. Run npm.cmd install and npm.cmd run build in this project.' }
-$loanNode = (Get-Command node.exe -ErrorAction Stop).Source
+$loanNode = Join-Path $loanRoot '.runtime\node.exe'
+if (-not (Test-Path -LiteralPath $loanNode)) {
+  $loanNode = (Get-Command node.exe -ErrorAction Stop).Source
+}
 function Test-LoanServer {
   try { $loanHealth = Invoke-RestMethod -Uri "$loanUrl/api/health" -TimeoutSec 2; return ($loanHealth.ok -eq $true -and $loanHealth.app -eq 'personal-loan-ledger') } catch { return $false }
 }

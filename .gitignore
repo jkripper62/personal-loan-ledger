@@ -8,3 +8,5 @@ server-dist/
 !.env.example
 *.log
 qa-temp/
+
+.runtime/

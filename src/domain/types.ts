@@ -9,6 +9,7 @@ export interface Loan {
   principalCents: number; openingInterestCents: number; rateBps: number;
   startDate: string; cycleStartDate: string; firstCycleEndDate: string;
   anchorDay: number; dueDate: string; notes: string; createdAt: string;
+  dueDateSetAt?: string; // Owner-selected due date resets automatic schedule from this time
   statusOverride?: "normal";
 }
 export interface Payment {
@@ -42,6 +43,7 @@ export interface AuditEntry {
   id: string; at: string; action: string; entityId: string; detail: string;
 }
 export interface LedgerData {
+  loanOrder?: string[];
   borrowers: Borrower[]; loans: Loan[]; payments: Payment[];
   rateChanges: RateChange[]; adjustments: Adjustment[];
   contacts: Contact[]; attachments: Attachment[]; audit: AuditEntry[];

@@ -9,6 +9,25 @@
 .stat-scope{display:block;font-size:12px;color:var(--muted);line-height:1.3;margin-top:2px}
 /* Daily interest and calendar forecasts share the dashboard's financial panels. */
 .interest-panel { margin-bottom: 26px; }
+.received-interest-panel { margin-bottom: 26px; }
+.received-subtitle { font-size: 12px; color: #64776e; margin-top: 5px; line-height: 1.7; }
+.received-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid #e0e6e7; border-bottom: 1px solid #e0e6e7; }
+.received-totals > div { padding: 20px 24px; border-right: 1px solid #e0e6e7; min-width: 0; }
+.received-totals > div:last-child { border-right: 0; }
+.received-totals p { font-size: 13px; color: #596678; margin-bottom: 8px; }
+.received-totals strong { font-size: clamp(21px, 2.3vw, 30px); color: #07513f; overflow-wrap: anywhere; }
+.received-table { padding-bottom: 12px; }
+.received-table td:last-child { color: #07513f; font-size: 16px; }
+.received-table tbody tr { cursor: default; }
+@media (max-width: 650px) {
+  .received-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .received-totals > div { padding: 16px; }
+  .received-totals > div:nth-child(2) { border-right: 0; }
+  .received-totals > div:last-child { grid-column: 1 / -1; border-top: 1px solid #e0e6e7; }
+  .received-table { overflow-x: auto; }
+  .received-table table { min-width: 470px; }
+}
+
 .interest-date { color: #61726c; font-size: 13px; }
 .interest-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; padding: 22px 24px 14px; }
 .interest-metrics p { margin: 0 0 8px; color: #566860; font-size: 14px; }
@@ -66,6 +85,22 @@
 }
 .modal-loan-context { display: block; margin-top: 7px; font-size: 12px; line-height: 1.7; }
 .portfolio-scope { margin: -8px 0 20px; color: #596678; font-size: 12px; line-height: 1.8; }
+.loan-reorder-table { overflow-x: auto; }
+.reorder-help { display: flex; gap: 5px; align-items: center; color: #596678; font-size: 12px; padding: 0 0 12px; }
+.reorder-help svg { width: 16px; height: 16px; flex-shrink: 0; }
+.reorder-column { width: 102px; }
+.reorder-cell { width: 102px; padding: 10px; }
+.reorder-actions { display: flex; align-items: center; gap: 6px; }
+.reorder-handle { touch-action: none; user-select: none; cursor: grab; display: grid; place-items: center; padding: 8px; border: 1px solid #dce8e0; border-radius: 8px; background: #eef6f1; color: #07513f; }
+.reorder-handle:active { cursor: grabbing; }
+.reorder-handle svg { width: 21px; height: 21px; pointer-events: none; }
+.reorder-steps { display: grid; gap: 2px; }
+.reorder-steps button { background: transparent; color: #53685d; border: 0; padding: 1px 4px; display: grid; place-items: center; }
+.reorder-steps svg { width: 15px; height: 15px; }
+.loan-dragging { opacity: .55; background: #eaf4ee; }
+.loan-drop-before { box-shadow: inset 0 4px 0 #0b7655; }
+.loan-drop-after { box-shadow: inset 0 -4px 0 #0b7655; }
+@media(max-width:650px) { .reorder-column,.reorder-cell { width: 72px; } .reorder-cell { padding: 7px 3px; } .reorder-actions { gap: 1px; } .reorder-handle { padding: 5px; } .reorder-help { line-height: 1.6; } }
 .loan-categories { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 20px 18px; }
 .loan-categories button { border: 1px solid #dce8e0; background: #fff; color: #426354; border-radius: 8px; padding: 9px 13px; font-size: 13px; }
 .loan-categories button.selected { background: #07513f; color: #fff; border-color: #07513f; }

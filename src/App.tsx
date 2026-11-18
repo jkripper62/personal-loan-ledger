@@ -2,8 +2,10 @@ import {
   useEffect,
   useMemo,
   useState,
+  useRef,
   type FormEvent,
   type ReactNode,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   Home,
@@ -28,6 +30,9 @@ import {
   Check,
   Wallet,
   ShieldCheck,
+  GripVertical,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 import { api, setCsrf, upload } from "./api";
 import { ModalView, type Modal } from "./components/modal";
@@ -46,6 +51,8 @@ import { isLoanOverdue } from "./domain/status";
 import { loanDisplayName } from "./domain/loan-name";
 import { isRealLoan, loanCategory, realLedgerData, type LoanCategory } from "./domain/loan-records";
 import { InterestOverview, InterestDetail } from "./components/interest";
+import { orderedLoans, type LoanPlacement } from "./domain/loan-order";
+import { ReceivedInterestOverview } from "./components/received-interest";
 import type {
   Borrower,
   Loan,
@@ -347,7 +354,7 @@ export default function App() {
   );
   const borrowerName = (id: string) =>
     data.borrowers.find((b) => b.id === id)?.name || "ผู้กู้";
-  const loans = data.loans.filter(
+  const loans = orderedLoans(data).filter(
     (l) =>
       loanDisplayName(borrowerName(l.borrowerId), l).includes(search) &&
       loanCategory(l, snapshots.get(l.id)) === category &&
@@ -362,6 +369,18 @@ export default function App() {
     await api(path, body, method);
     await reload();
     setNotice("บันทึกเรียบร้อยแล้ว");
+  }
+  async function reorderLoan(loanId: string, targetId: string, placement: LoanPlacement) {
+    setBusy(true);
+    try {
+      await api("/loans/reorder", { loanId, targetId, placement });
+      await reload();
+      setNotice("บันทึกลำดับสัญญาเรียบร้อยแล้ว");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
   async function setLoanStatus(loan: Loan) {
     setBusy(true);
@@ -513,6 +532,7 @@ export default function App() {
                   ))}
                 </div>
                 <p className="portfolio-scope">ยอดบัญชีจริงรวมเงินที่รับจากสัญญาปิดแล้ว · ไม่รวมสัญญาทดลองและถังขยะ</p>
+                <ReceivedInterestOverview data={realData} today={today} />
                 <InterestOverview data={activeData} forecasts={forecasts} select={setSelected} today={today} />
                 <div className="dashboard-grid">
                   <section className="panel contracts">
@@ -543,6 +563,7 @@ export default function App() {
                       snapshots={snapshots}
                       setStatus={setLoanStatus}
                       busy={busy}
+                      reorder={reorderLoan}
                       name={borrowerName}
                       select={setSelected}
                       open={setModal}
@@ -675,12 +696,13 @@ export default function App() {
                           </Button>
                         </div>
                         <LoanTable
-                          loans={data.loans.filter(
+                          loans={orderedLoans(data).filter(
                             (l) => l.borrowerId === b.id && loanCategory(l, snapshots.get(l.id)) === category,
                           )}
                           snapshots={snapshots}
                           open={setModal}
                           setStatus={setLoanStatus}
+                          reorder={reorderLoan}
                           busy={busy}
                           name={borrowerName}
                           select={setSelected}
@@ -905,6 +927,7 @@ function LoanTable({
   name,
   select,
   setStatus,
+  reorder,
   busy,
   open,
 }: {
@@ -913,14 +936,58 @@ function LoanTable({
   name: (id: string) => string;
   select: (id: string) => void;
   setStatus: (loan: Loan) => void;
+  reorder: (loanId: string, targetId: string, placement: LoanPlacement) => void;
   busy: boolean;
   open: (modal: Modal) => void;
 }) {
+  const drag = useRef<{ id: string; targetId?: string; placement?: LoanPlacement; startY: number; moved: boolean } | null>(null);
+  const [dragged, setDragged] = useState("");
+  const [drop, setDrop] = useState<{ id: string; placement: LoanPlacement } | null>(null);
+  function pointerDown(event: ReactPointerEvent<HTMLButtonElement>, id: string) {
+    if (busy || event.button !== 0) return;
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    drag.current = { id, startY: event.clientY, moved: false };
+  }
+  function pointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const current = drag.current;
+    if (!current) return;
+    if (!current.moved && Math.abs(event.clientY - current.startY) < 5) return;
+    current.moved = true;
+    setDragged(current.id);
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest("tr[data-loan-id]");
+    const id = row?.getAttribute("data-loan-id") ?? "";
+    if (!id || id === current.id) {
+      current.targetId = undefined;
+      setDrop(null);
+      return;
+    }
+    const rectangle = row!.getBoundingClientRect();
+    const placement: LoanPlacement = event.clientY < rectangle.top + rectangle.height / 2 ? "before" : "after";
+    current.targetId = id;
+    current.placement = placement;
+    setDrop({ id, placement });
+  }
+  function pointerUp() {
+    const current = drag.current;
+    drag.current = null;
+    setDragged("");
+    setDrop(null);
+    if (current?.moved && current.targetId && current.placement)
+      reorder(current.id, current.targetId, current.placement);
+  }
+  function moveOne(id: string, offset: number) {
+    const index = loans.findIndex(loan => loan.id === id);
+    const target = loans[index + offset];
+    if (target) reorder(id, target.id, offset < 0 ? "before" : "after");
+  }
   return (
-    <div className="table-scroll">
+    <div className="table-scroll loan-reorder-table">
+      <p className="reorder-help">ลากสัญลักษณ์ <GripVertical size={15} /> เพื่อเรียงสัญญาตามต้องการ หรือกดลูกศรขึ้น–ลง · บันทึกลำดับอัตโนมัติ</p>
       <table>
         <thead>
           <tr>
+            <th className="reorder-column">จัดเรียง</th>
             <th>ผู้กู้</th>
             <th>เงินต้นคงเหลือ</th>
             <th>ครบกำหนด</th>
@@ -931,7 +998,24 @@ function LoanTable({
           {loans.map((l) => {
             const s = snapshots.get(l.id);
             return (
-              <tr key={l.id} onClick={() => { if (l.recordStatus !== "trashed-test") select(l.id); }}>
+              <tr key={l.id} data-loan-id={l.id} className={`${dragged === l.id ? "loan-dragging" : ""} ${drop?.id === l.id ? `loan-drop-${drop.placement}` : ""}`} onClick={() => { if (!dragged && l.recordStatus !== "trashed-test") select(l.id); }}>
+                <td className="reorder-cell" onClick={event => event.stopPropagation()}>
+                  <div className="reorder-actions">
+                    <button type="button" className="reorder-handle" disabled={busy} title="ลากเพื่อจัดเรียงสัญญา"
+                      aria-label={`ลากจัดเรียง ${loanDisplayName(name(l.borrowerId), l)}`}
+                      onPointerDown={event => pointerDown(event, l.id)}
+                      onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp}
+                      onClick={event => event.stopPropagation()}><GripVertical /></button>
+                    <div className="reorder-steps">
+                      <button type="button" disabled={busy || loans[0]?.id === l.id}
+                        aria-label={`เลื่อน ${loanDisplayName(name(l.borrowerId), l)} ขึ้น`}
+                        onClick={() => moveOne(l.id, -1)}><ArrowUp /></button>
+                      <button type="button" disabled={busy || loans[loans.length - 1]?.id === l.id}
+                        aria-label={`เลื่อน ${loanDisplayName(name(l.borrowerId), l)} ลง`}
+                        onClick={() => moveOne(l.id, 1)}><ArrowDown /></button>
+                    </div>
+                  </div>
+                </td>
                 <td>
                   <button className="table-name" disabled={l.recordStatus === "trashed-test"} onClick={() => select(l.id)}>
                     {loanDisplayName(name(l.borrowerId), l)}
@@ -1109,6 +1193,9 @@ function LoanDetail({
                   onClick={() => open({ kind: "payoff", loan })}
                 >
                   ปิดหนี้
+                </Button>
+                <Button secondary onClick={() => open({ kind: "due-date", loan })}>
+                  แก้วันนัดชำระ
                 </Button>
                 <Button secondary onClick={() => open({ kind: "loan-correction", loan })}>
                   แก้ต้น / ดอก / วันนัด
